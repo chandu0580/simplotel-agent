@@ -9,7 +9,7 @@ What guest data this system handles, where it goes, how long it stays, and what 
 | Guest message text (after masking) | Chat input | LLM provider (current message + last `CONVERSATION_CONTEXT_WINDOW` messages); conversation state | Conversation TTL (24 h sliding), or until the guest deletes it | IMPLEMENTED + TESTED |
 | Booking context (dates, adults, children) | Form or model tool call | Conversation state; model context | Conversation TTL | IMPLEMENTED + TESTED |
 | Reply text and type | Assistant | Conversation state | Conversation TTL | IMPLEMENTED + TESTED |
-| Client IP address | HTTP | Rate-limit keys: raw in the in-memory limiter, **SHA-256-hashed** in Redis. Not in the app's structured `http_request` log; uvicorn's default access log and nginx's access log do record it (disable or ship them with an IP policy) | Rate-limit window (≤ 1 min) in Redis | IMPLEMENTED + TESTED (hashing) |
+| Client IP address | HTTP | Rate-limit keys: raw in the in-memory limiter, **SHA-256-hashed** in Redis. Not in the app's structured `http_request` log; uvicorn's default access log and any reverse proxy's access log do record it (disable or ship them with an IP policy) | Rate-limit window (≤ 1 min) in Redis | IMPLEMENTED + TESTED (hashing) |
 | Domain events | Service | Logs; PostgreSQL `audit_events` when `DATABASE_URL` is set | `AUDIT_RETENTION_DAYS` (365) via the retention job | IMPLEMENTED + TESTED |
 | AI traces | Service | Logs and an in-memory ring buffer; ids, versions, evidence ids, tool names and arguments for read-only tools (dates, guest counts), token counts, latencies. **No message text** | Log retention (not configured here) | IMPLEMENTED + TESTED |
 | Guest identity for bookings | Authenticated principal | Opaque `guest_reference` only; never name, email or phone | Booking lifetime | DESIGNED (no guest authentication is implemented) |
@@ -50,7 +50,7 @@ Evidence (`tests/test_privacy.py`):
 | PostgreSQL `conversations` / `messages` / `tool_calls` | Same job deletes expired conversations, and child rows cascade. These tables are schema only; nothing writes to them yet | Same test |
 | Logs and traces | Owned by the log pipeline. **Not configured** in this repository | — |
 
-The retention job is a command. Scheduling it (cron, a Kubernetes CronJob) is part of deployment and **NOT IMPLEMENTED** here.
+The retention job is a command. Scheduling it (for example with cron) is part of deployment and **NOT IMPLEMENTED** here.
 
 ## Deletion
 

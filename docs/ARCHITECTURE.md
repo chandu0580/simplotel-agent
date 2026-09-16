@@ -9,7 +9,7 @@ A short map of the codebase as it is today. For depth, see:
 | [THREAT_MODEL.md](THREAT_MODEL.md) | Threats, mitigations, residual risk |
 | [SRE.md](SRE.md) / [OBSERVABILITY.md](OBSERVABILITY.md) | Reliability, proposed SLOs, runbooks, telemetry, dashboards |
 | [COST_MODEL.md](COST_MODEL.md) | LLM cost drivers and levers |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Images, compose stacks (single instance and 3 replicas), migrations, verification |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Running locally, optional Redis/PostgreSQL adapters, migrations, hosting requirements |
 | [CONFIGURATION.md](CONFIGURATION.md) | Environment variables, defaults and production validation rules |
 | [PERFORMANCE.md](PERFORMANCE.md) | Local load-test results and what they do and don't show |
 | [PRIVACY.md](PRIVACY.md) | Personal-data masking, events, deletion and retention |
@@ -19,7 +19,27 @@ A short map of the codebase as it is today. For depth, see:
 
 ## Shape: a modular monolith
 
-One FastAPI process, split into packages with one-way dependencies. Every boundary is an interface, and the implementation for each is chosen in one file, [`app/container.py`](../backend/app/container.py). The same image runs as one instance with in-memory state, or as several replicas sharing Redis ([DEPLOYMENT.md](DEPLOYMENT.md)).
+One FastAPI process, split into packages with one-way dependencies. Every boundary is an interface, and the implementation for each is chosen in one file, [`app/container.py`](../backend/app/container.py). By default everything runs in one process with in-memory state; optional Redis and PostgreSQL adapters sit behind the same interfaces ([DEPLOYMENT.md](DEPLOYMENT.md)).
+
+Product topology:
+
+```mermaid
+flowchart LR
+    G[Guest] --> W[React web app]
+    W -->|/api/v1| A[FastAPI API]
+    A --> T[Tenant context]
+    T --> C[Conversation service]
+    C --> O[AI orchestrator]
+    O --> K[Knowledge]
+    O --> TL[Tools]
+    O --> GR[Guardrails]
+    O --> L[LLM provider]
+    TL --> R[Reservation / hotel systems]
+```
+
+State stores (conversations, rate limits, idempotency, locks, audit) are implementation details behind interfaces: in-memory by default, optional Redis and PostgreSQL adapters.
+
+Code map:
 
 ```
 Browser (React)
@@ -45,8 +65,8 @@ assistant/      AssistantService (one guest turn, any channel)
 
 core/     config & validation · feature flags · errors · structured logging & redaction · metrics · privacy
           AI traces · domain events · cache · rate limiter · locks · resilience · clock · versioning
-state/    Redis implementations: conversations, rate limiter, idempotency, locks (STATE_BACKEND=redis)
-db/       PostgreSQL audit sink · migration runner · retention job     migrations/  SQL schema with row-level security
+state/    optional Redis implementations: conversations, rate limiter, idempotency, locks (STATE_BACKEND=redis)
+db/       optional PostgreSQL audit sink · migration runner · retention job     migrations/  SQL schema with row-level security
 tenancy   TenantRegistry · TenantContext           auth/      Principal, roles, auth providers
 channels/ web · WhatsApp · voice render adapters   data/      tenants.json, hotels/<hotel_id>/{hotel,inventory}.json
 ```
@@ -107,13 +127,16 @@ Proposed production stores beyond this (object storage, database-backed reposito
 - **Metrics** (`/metrics`, internal only): `assistant_requests_total`, `assistant_success_total`, `assistant_failures_total`, `assistant_fallback_total`, `assistant_replies_total`, `unsupported_question_total`, `availability_search_total`, `tool_calls_total`, `tool_failures_total`, `guardrail_interventions_total`, `prompt_injection_signals_total`, `rate_limited_total`, `llm_tokens_total{kind,model}`, `llm_latency_ms`, `tool_latency_ms`, `request_latency_ms`, `turn_latency_ms{mode}`, `app_latency_ms{mode}`, `retrieval_latency_ms`, `pii_masked_total{kind}`, `state_backend_errors_total{component}`, `conversation_conflicts_total`, `audit_events_total{outcome}`.
 - **Events:** `ConversationStarted`, `ConversationDeleted`, `GuestQuestionAsked`, `AssistantResponseGenerated`, `AvailabilityChecked`, `FallbackTriggered`, `GuardrailTriggered`, `ToolFailed`, `BookingRequested`, `BookingConfirmed`.
 
-## Deployment
+## Running and delivery
 
-Details and verification results: [DEPLOYMENT.md](DEPLOYMENT.md).
+Details: [DEPLOYMENT.md](DEPLOYMENT.md).
 
-- **Images:** `backend/Dockerfile` and `frontend/Dockerfile` are multi-stage builds on digest-pinned base images. They run as non-root (backend uid 10001, frontend nginx uid 101) and include health checks. The backend image ships the migrations and stops gracefully on SIGTERM (`--timeout-graceful-shutdown 25`).
-- **Compose:** `docker-compose.yml` runs both containers on read-only filesystems with no capabilities and no new privileges. The frontend's nginx proxies `/api` with a non-spoofable `X-Forwarded-For` and adds security headers on every location; `/metrics` and the backend port are not exposed. `docker-compose.scale.yml` runs nginx, 3 backend replicas, Redis, PostgreSQL and a migration job; Redis and PostgreSQL publish no host ports, and the application database role is not a superuser and cannot bypass row-level security.
-- **CI:** `.github/workflows/ci.yml` runs backend lint, tests, the offline eval gate and dependency audit; integration tests against Redis and PostgreSQL service containers; a secret scan; frontend lint, build, tests, bundle secret scan and audit; Playwright E2E; and Docker jobs (image build and checks, single-instance and 3-replica stack verification, a simultaneous booking probe, graceful stop). Standard CI needs no LLM secret.
+- **Local run:** backend in a Python virtual environment (`pip install -r requirements.txt`, `uvicorn app.main:app --reload --port 8000`); frontend with `npm install` and `npm run dev` (Vite proxies `/api` to the backend). See the [README](../README.md#quick-start).
+- **Docker/containerization:** NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. A container setup existed earlier and was removed as out of scope.
+- **Graceful shutdown:** handled in the application lifespan: after uvicorn stops accepting connections and drains in-flight requests, queued audit events are flushed, pools and clients are closed, and `shutdown_complete` is logged.
+- **Security headers:** the backend middleware sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store`, and HSTS in production. `Content-Security-Policy`, `Permissions-Policy` and HSTS for the SPA are a hosting requirement: whatever serves the built SPA in a real deployment must set them. This is not implemented in this repo.
+- **Optional adapters:** Redis (`STATE_BACKEND=redis`) and PostgreSQL (`DATABASE_URL`: migrations, row-level security with a non-superuser application role, audit sink, retention). Their integration tests (`backend/tests/integration`) skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` point at running services; they were verified locally once and are not run in CI.
+- **CI:** `.github/workflows/ci.yml` has four jobs: backend (lint, tests, offline eval gate, dependency audit), security (secret scan, no committed `.env`), frontend (lint, build, tests, bundle secret scan, audit) and e2e (Playwright). Standard CI needs no LLM secret and no Docker.
 - **Live AI eval:** `.github/workflows/live-ai-eval.yml` is a manual, secret-gated workflow (provider `glm` or `anthropic`) for evaluating against a live model.
 - **Neither workflow has been run on GitHub.**
 - Nothing here is production-ready; see [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).

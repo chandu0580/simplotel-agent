@@ -1,6 +1,6 @@
 # SRE guide
 
-Operational reference for the hotel guest assistant (FastAPI backend in `backend/app`, React/Vite SPA served by nginx in `frontend/`). For signal definitions, dashboards and alert queries see [OBSERVABILITY.md](OBSERVABILITY.md). Related: deployment topology and procedures in [DEPLOYMENT.md](DEPLOYMENT.md), every environment variable in [CONFIGURATION.md](CONFIGURATION.md), load-test method and results in [PERFORMANCE.md](PERFORMANCE.md), PMS adapter contract in [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md), data handling in [PRIVACY.md](PRIVACY.md), and the overall evidence status in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).
+Operational reference for the hotel guest assistant (FastAPI backend in `backend/app`, React/Vite SPA in `frontend/`). Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. Locally the backend runs as `uvicorn app.main:app --reload --port 8000` (inside a virtualenv) and the SPA as `npm run dev` (Vite dev server on :5173, proxying `/api`). For signal definitions, dashboards and alert queries see [OBSERVABILITY.md](OBSERVABILITY.md). Related: deployment topology and procedures in [DEPLOYMENT.md](DEPLOYMENT.md), every environment variable in [CONFIGURATION.md](CONFIGURATION.md), load-test method and results in [PERFORMANCE.md](PERFORMANCE.md), PMS adapter contract in [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md), data handling in [PRIVACY.md](PRIVACY.md), and the overall evidence status in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).
 
 > **Status of numbers in this document.** No production traffic exists. The live Anthropic API is **NOT VERIFIED (no Anthropic credential)**; the default runtime provider is GLM (`LLM_PROVIDER=glm`, model `glm-5.2`), and GLM results are evidence for the GLM runtime only. Neither GitHub Actions workflow has been run on GitHub. Every SLO, alert threshold, RPO and RTO below is a **Proposed target (not measured in production)**. The measured figures are local or development measurements, not production capacity:
 >
@@ -11,7 +11,6 @@ Operational reference for the hotel guest assistant (FastAPI backend in `backend
 > | Local HTTP load test (offline turns, availability, mock AI turns at 10–100 users) | see [PERFORMANCE.md](PERFORMANCE.md) | | `python -m perf.load_test`, one uvicorn worker, same machine as the client. **Local benchmark, not production capacity** |
 > | Eval scenario latency, GLM adapter, development suite (34 scenarios), two runs | 5511 / 5593 ms | 12620 / 14280 ms | `evals/results/glm-5.2-adapter-run{1,2}`; 34/34 both runs. **GLM runtime evidence, not Claude** |
 > | Eval scenario latency, GLM adapter, holdout suite (12 adversarial scenarios) | 5820 ms | 9948 ms | `evals/results/glm-5.2-holdout-run1`; 12/12 |
-> | Graceful stop of one replica (3-replica compose stack) | ~2.1 s to exit 0 | | edge served 12/12 requests meanwhile (§4, Graceful shutdown) |
 
 ---
 
@@ -19,8 +18,8 @@ Operational reference for the hotel guest assistant (FastAPI backend in `backend
 
 ```mermaid
 flowchart LR
-  G[Guest browser] --> N[nginx :8080<br/>SPA + /api proxy]
-  N --> B[backend uvicorn :8000<br/>1 replica, or 3 with docker-compose.scale.yml]
+  G[Guest browser] --> N[SPA host<br/>Vite dev server locally; TLS edge in a real deployment, not in this repo]
+  N --> B[backend uvicorn :8000<br/>one process]
   B --> L[(LLM provider<br/>GLM default; Anthropic adapter)]
   B --> R[(Reservation provider<br/>Mock today, PMS/CRS later)]
   B --> K[(Knowledge store<br/>JSON files in app/data)]
@@ -49,15 +48,10 @@ Caches (knowledge snapshots, availability results) stay per process by design an
 | `GET /ready` | Readiness: can this instance usefully serve guests? | `knowledge` (**gating**): every hotel in the tenant registry loads → `ok`/`failing`; `state` (**gating**): the conversation store answers (always `ok` for memory; Redis reachability for `STATE_BACKEND=redis`) → `ok`/`failing`; `reservations` (informational): `ok`, or `degraded` when the breaker is `open` or the inner provider is unhealthy; `llm` (informational): `configured`/`not_configured`; `audit_store` (informational): `ok`/`failing` (last batch write failed)/`not_configured` | `200 {"status":"ready","checks":{...}}`; `503 {"status":"not_ready",...}` **only** when `knowledge` or `state` is `failing` |
 | `GET /metrics` | Prometheus exposition; 404 when `METRICS_ENABLED=false` | n/a | text format |
 | `GET /api/health` | Deprecated legacy endpoint; also returns `mode` (`ai`/`offline`) for the default hotel | None | `200` with `Deprecation` header |
-| nginx `GET /healthz` | Frontend container liveness | None | `200 ok` |
 
-Container and compose wiring (as implemented):
+No health-check wiring ships with the repository (there are no container or process-manager definitions). `/health`, `/ready` and `/metrics` are served on the backend port itself; whatever hosts the backend in a real deployment must keep them off the public edge (see [THREAT_MODEL.md](THREAT_MODEL.md), cross-cutting notes).
 
-- `backend/Dockerfile` `HEALTHCHECK` polls `http://127.0.0.1:8000/health` (interval 30 s, timeout 3 s, start period 15 s, 3 retries).
-- `frontend/Dockerfile` `HEALTHCHECK` polls `http://127.0.0.1:8080/healthz` (interval 30 s, timeout 3 s, 3 retries).
-- `docker-compose.yml`: `frontend.depends_on.backend.condition: service_healthy`; both services `restart: unless-stopped`. The backend port is not published; nginx proxies only `/api/`, so `/health`, `/ready` and `/metrics` are reachable only on the internal network.
-
-Guidance for an orchestrator (proposed):
+Guidance for whatever supervises the process (proposed):
 
 - **Liveness probe → `/health`.** It is the only `async def` endpoint and runs on the event loop, so a saturated worker thread pool (e.g. many turns blocked on a slow LLM) doesn't fail liveness. It does fail if the event loop itself is blocked, which is the right trigger for a restart. Guest endpoints that do tenant resolution and rate limiting (Redis round trips) are sync handlers so that work runs in the thread pool, not on the event loop; a regression test checks that only `/health` is async and that it answers in < 300 ms while 4 requests wait on a 0.5 s rate limiter (`tests/test_state.py::test_blocking_state_calls_never_run_on_the_event_loop`). A restart drops memory-backend conversations, so keep failure thresholds at ≥ 3.
 - **Startup / deploy gate → `/ready`.** Don't shift traffic to a new revision until it returns 200.
@@ -113,9 +107,8 @@ Notes on the definitions:
 | Tool default | 10 s | `ToolDefinition` |
 | Conversation turn lock | wait `CONVERSATION_LOCK_WAIT_SECONDS=30`, lease `CONVERSATION_LOCK_LEASE_SECONDS=120` (startup fails unless the lease exceeds `LLM_TIMEOUT_SECONDS × (LLM_MAX_RETRIES + 1)`) | `config.py`, `conversations/service.py` |
 | Redis socket | connect and read 2 s | `state/redis_backend.py` `connect` |
-| Request body | 64 KB: API middleware rejects by `Content-Length` with 413 `PAYLOAD_TOO_LARGE`; nginx `client_max_body_size 64k` | `api/middleware.py`, `frontend/nginx.conf` |
-| nginx → backend | `proxy_read_timeout 60s` | `frontend/nginx.conf` |
-| Graceful shutdown | `uvicorn --timeout-graceful-shutdown 25`; compose `stop_grace_period: 30s` in the scale file | `backend/Dockerfile`, `docker-compose.scale.yml` |
+| Request body | 64 KB: API middleware rejects by `Content-Length` with 413 `PAYLOAD_TOO_LARGE` | `api/middleware.py` |
+| Graceful shutdown drain | Not set in the repository: uvicorn's default applies unless the operator passes `--timeout-graceful-shutdown` | uvicorn command line (deployment) |
 
 There is no end-to-end request deadline. `call_with_timeout` stops *waiting*; it cannot kill the running Python thread, so a hung integration keeps its worker thread busy (and its work may still finish in the background) after the caller has given up. This is why mutating calls rely on idempotency keys. GLM HTTP timeouts do close the connection (tested with a real slow HTTP server: a 0.3 s timeout is abandoned in < 1.5 s, `tests/test_contracts.py::test_glm_timeout_abandons_the_request_within_the_budget`).
 
@@ -155,14 +148,14 @@ The `TTLCache` is per process in both state backends, by design (short TTL, chea
 
 ### Conversation concurrency
 
-Every conversation has a `version`; `save(conversation, expected_version)` is compare-and-set in both backends (Lua script in Redis). A per-conversation lock (in-process for memory, `RedisLockStore` token lease for Redis) serialises turns so concurrent messages don't waste model calls; the version check guarantees no lost update if a lease expires. A turn that can't get the lock within the wait, or loses the version check, returns **409 `CONVERSATION_BUSY` with `Retry-After: 2`**; a lost version check also increments `conversation_conflicts_total`. The frontend retries a 409 once after `Retry-After` (capped at 3 s). Measured with locks disabled (CAS alone): 6 concurrent turns on 3 replicas → 1 saved, 5 rejected with 409, no lost update.
+Every conversation has a `version`; `save(conversation, expected_version)` is compare-and-set in both backends (Lua script in Redis). A per-conversation lock (in-process for memory, `RedisLockStore` token lease for Redis) serialises turns so concurrent messages don't waste model calls; the version check guarantees no lost update if a lease expires. A turn that can't get the lock within the wait, or loses the version check, returns **409 `CONVERSATION_BUSY` with `Retry-After: 2`**; a lost version check also increments `conversation_conflicts_total`. The frontend retries a 409 once after `Retry-After` (capped at 3 s). Measured once locally with locks disabled (CAS alone): 6 concurrent turns on 3 replicas → 1 saved, 5 rejected with 409, no lost update.
 
 ### Graceful shutdown
 
-- The backend image runs `uvicorn ... --timeout-graceful-shutdown 25`. On SIGTERM uvicorn stops accepting connections and drains in-flight requests for up to 25 s.
-- The FastAPI lifespan then cancels the conversation purge task and calls `container.close()`: flush and close the PostgreSQL audit sink (up to 10 s), close the LLM client, close the Redis client. It logs `shutdown_complete` last.
-- `docker-compose.scale.yml` sets `stop_grace_period: 30s`, above the 25 s drain, so Docker doesn't SIGKILL a replica that is still draining. Keep the orchestrator's grace period above 25 s + audit flush time.
-- Measured on the 3-replica compose stack: SIGTERM on one replica → exit code 0 in ~2.1 s with `shutdown_complete` logged; the nginx edge served 12/12 requests while that replica was down. An in-flight AI turn could need up to the LLM budget (≈ 40 s + backoff with defaults), which exceeds the 25 s drain; that case was not measured.
+- On SIGTERM/SIGINT uvicorn stops accepting connections and drains in-flight requests. The repository doesn't fix a drain limit; an operator can bound it with `uvicorn ... --timeout-graceful-shutdown <seconds>`.
+- The FastAPI lifespan (`app/main.py`) then cancels the conversation purge task and calls `container.close()` (the app's dependency container): flush and close the PostgreSQL audit sink (up to 10 s), close the LLM client, close the Redis client. It logs `shutdown_complete` last.
+- Whatever supervises the process should allow a stop grace period above the drain limit plus the audit flush time, so the process isn't killed while draining.
+- Not measured: there is no current shutdown-timing measurement and no automated test reads the `shutdown_complete` log. An in-flight AI turn could need up to the LLM budget (≈ 40 s + backoff with defaults), so a short drain limit would cut it off.
 
 ### Graceful-degradation matrix
 
@@ -182,12 +175,12 @@ Every conversation has a `version`; `save(conversation, expected_version)` is co
 | PostgreSQL audit store slow or down (`DATABASE_URL` set) | Guest requests unaffected (asynchronous bounded queue); events lost when the queue is full or a batch write fails | None | `audit_events_total{outcome="dropped"\|"failed"}`, `audit_write_failed` ERROR log, `/ready` body `audit_store: failing` (HTTP 200) |
 | Output guardrail trips | Reply replaced by safe fallback / booking form; model-written form messages with a price or inventory claim are dropped (`unsupported_claim`) and such suggestions are filtered out | Less helpful answer, never an ungrounded price or availability claim | `guardrail_interventions_total{guardrail}` |
 | Guest sends two messages concurrently on one conversation | Turns serialised by the conversation lock (shared across replicas with Redis); CAS on save | Second reply waits for the first, or 409 `CONVERSATION_BUSY` after the lock wait (the widget retries once) | `request_latency_ms` on `.../messages`, `conversation_conflicts_total` |
-| Request body > 64 KB | 413 `PAYLOAD_TOO_LARGE` at nginx or in the API middleware | Error, no retry offered | 4xx |
-| Process restart | Memory backend: conversations, rate-limit windows, idempotency records and mock bookings lost. Redis backend: only per-process caches, breaker state and mock bookings are lost | Memory: guest starts a new chat | Container restart count |
+| Request body > 64 KB | 413 `PAYLOAD_TOO_LARGE` in the API middleware (declared `Content-Length`) | Error, no retry offered | 4xx |
+| Process restart | Memory backend: conversations, rate-limit windows, idempotency records and mock bookings lost. Redis backend: only per-process caches, breaker state and mock bookings are lost | Memory: guest starts a new chat | `startup` log events (process restarts) |
 
 ## 5. Degraded modes and kill switches
 
-All switches are read at startup. **Every change needs a process restart** (there is no runtime toggle API). The image runs with a read-only root filesystem and `app/data` baked in, so file-based changes need an image rebuild or a `DATA_DIR` volume.
+All switches are read at startup. **Every change needs a process restart** (there is no runtime toggle API). File-based changes (`tenants.json`, hotel data under `app/data` or `DATA_DIR`) are also read at startup or cached, so they need a restart (knowledge files refresh after the 300 s cache TTL).
 
 | Switch | Effect | Use during incidents |
 |---|---|---|
@@ -207,7 +200,7 @@ Startup safety: an unknown `FEATURE_*` variable fails startup (`Unknown feature 
 
 ## 6. Capacity and scaling notes
 
-Topology: **one uvicorn process per container, no `--workers`**. `docker-compose.yml` runs one backend replica with memory state; `docker-compose.scale.yml` runs three replicas sharing Redis (plus PostgreSQL for audit events) behind nginx. The scale file is a local rehearsal, not a production deployment; see [DEPLOYMENT.md](DEPLOYMENT.md).
+Topology today: **one uvicorn process, no `--workers`**, with memory state by default. Running several backend processes that share Redis (and PostgreSQL for audit events) behind a load balancer is a **DESIGNED/future** topology: the shared-state adapters exist and were exercised in-process (below), but no multi-instance deployment exists or is defined in this repository. Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 - Guest endpoints are sync handlers run in AnyIO's thread pool. Its size is set at startup from `WORKER_THREADS` (default 150, logged in the `startup` event with `state_backend`). The LLM call blocks one of those threads for its whole duration, so in-flight AI turns per process are capped by that limiter. `/ready` and `/metrics` compete for the same pool; `/health` is `async def` and runs on the event loop.
 - Local load testing found AI-turn throughput capped by the thread pool, not CPU: ≈ 25 rps with 40 threads and a fixed 1.5 s mock model, which is why the default became 150. CPU-bound offline paths saturate one core at ≈ 25 concurrent users. Figures and method: [PERFORMANCE.md](PERFORMANCE.md) (**local benchmark, not production capacity**).
@@ -231,57 +224,30 @@ Topology: **one uvicorn process per container, no `--workers`**. `docker-compose
 
 ### Multi-replica verification
 
-This is how the shared-state behaviour is checked against real containers. The CI `docker` job in `.github/workflows/ci.yml` runs the same steps, but **the workflow has not been run on GitHub**; the results below come from a local run.
+Shared-state behaviour is checked by integration tests that build **three independent app instances in one pytest process** (each with its own dependency `Container` and `TestClient`) sharing one real Redis. There are no container steps. **These tests are not run in CI**: they skip unless `TEST_REDIS_URL` is set (and `tests/integration/test_postgres.py` skips unless `TEST_DATABASE_URL` is set).
 
-**Stack.** `docker-compose.yml` + `docker-compose.scale.yml`: nginx, 3 backend replicas (`STATE_BACKEND=redis`, `DATABASE_URL` using the non-superuser `simplotel_app` role), Redis 7.4, PostgreSQL 17, and a one-shot `migrate` job (`python -m app.db.migrate` as the owner role). Redis and PostgreSQL publish no host ports. Both database passwords are required from the environment (`:?`). AI is disabled, so no model traffic is generated.
-
-**Steps** (from `backend/`, as the CI job does; the scripts need Python 3.13 with `httpx` installed on the host, and `COMPOSE_FILE` uses `:` as the separator on Linux/macOS):
+**Run** (from `backend/`, with the virtualenv active and a Redis you provide; the tests use a random key prefix and delete their keys afterwards):
 
 ```bash
-export SA_DB_OWNER_PASSWORD=$(openssl rand -hex 16) SA_DB_APP_PASSWORD=$(openssl rand -hex 16)
-export COMPOSE_FILE=../docker-compose.yml:../docker-compose.scale.yml
-docker compose up -d --wait
-
-# 1. Black-box checks through the nginx edge (http://127.0.0.1:8080)
-python -m scripts.verify_stack --expect-shared-state
-#    --burst-limit/--burst-window must match RATE_LIMIT_IP_BURST / RATE_LIMIT_BURST_WINDOW_SECONDS
-#    of the stack (defaults 30 and 10)
-
-# 2. The same booking fired simultaneously inside each replica
-key="idem-local-$(date +%s)" start=$(( $(date +%s) + 8 ))
-for i in 1 2 3; do
-  docker compose exec -T -e FEATURE_BOOKING_TOOLS_ENABLED=true -e LOG_LEVEL=ERROR --index $i \
-    backend python - "$key" "$start" < scripts/replica_booking_probe.py > probe-$i.txt &
-done
-wait
-cat probe-*.txt   # expect one distinct booking_id, and created_here=True exactly once
-
-# 3. Graceful stop
-docker compose stop -t 30 backend
-docker compose logs backend | grep -c shutdown_complete
-
-docker compose down -v
+TEST_REDIS_URL=redis://127.0.0.1:6379/15 python -m pytest tests/integration/test_redis_state.py
+# optional, PostgreSQL (the test creates a throwaway database and a NOSUPERUSER NOBYPASSRLS app role):
+TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres python -m pytest tests/integration/test_postgres.py
 ```
 
-What each check proves:
+What `tests/integration/test_redis_state.py` covers:
 
-- `verify_stack.py` (without the flag it also runs against the single-instance stack): edge `/healthz`; SPA index and hashed asset (immutable caching); security headers present exactly once on index, asset and API (CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`); no HSTS over plain HTTP; no version in the `Server` header; API reachable; `Cache-Control: no-store` and `X-Request-ID` on the API; error envelope with `code` and `request_id`; 413 for a 70 KB body; `/metrics` not reachable through the edge; 8 concurrent turns on one conversation return only 200/409/429 and store exactly 2 messages per answered turn (no lost update). With `--expect-shared-state`, it fires 2 × burst-limit requests from one IP and requires exactly burst-limit to succeed, i.e. the limit is enforced once across replicas, not once per replica.
-- `replica_booking_probe.py` builds a container from the replica's own environment (so it uses that replica's Redis and PostgreSQL), waits for the agreed start time, and calls `create_booking` with the shared idempotency key. Every replica must print the same `booking_id`; exactly one must report `created_here=True`.
-- The stop step checks that replicas exit through the lifespan shutdown path.
-
-**Measured results (local run, AI disabled):**
-
-| Check | Result |
+| Test | Behaviour |
 |---|---|
-| `verify_stack.py --expect-shared-state` | 33/33 checks passed. 8 concurrent turns → 16 stored messages. IP burst limit enforced once across replicas: exactly 15 of 30 allowed. **That run used the earlier default of 15 requests per 5 s**; the default is now 30 per 10 s, which the script and CI job use (60 attempts, 30 expected) |
-| Load spread | nginx distributed requests 23 / 18 / 16 across the three replicas |
-| Simultaneous duplicate booking | Same booking id `BK-CF244A1CA0` in all 3 containers; `created_here=True` on exactly one |
-| PostgreSQL audit trail after the probe | `BookingRequested` 3, `BookingConfirmed` 1 (deterministic event id for idempotent replays) |
-| Replica state | All replicas run as uid 10001; `/ready` reports `state: ok` and `audit_store: ok` |
-| Database role | App role is not superuser and has no `BYPASSRLS` |
-| SIGTERM on one replica | Exit 0 in ~2.1 s, `shutdown_complete` logged; edge served 12/12 requests while that replica was down |
+| `test_concurrent_turns_on_three_replicas_lose_nothing` | Concurrent turns on one conversation across 3 in-process instances: no lost update (6 turns → 12 stored messages) |
+| `test_duplicate_booking_on_three_replicas_creates_one_booking` | 9 concurrent duplicate bookings with one idempotency key → 1 booking id, created on exactly 1 instance |
+| `test_simultaneous_availability_and_shared_limits_on_three_replicas` | One IP budget across instances (limit 6: 6 allowed, 3 rejected with 429); every instance returns the same availability |
+| `test_cross_tenant_access_is_rejected_on_another_replica` | A conversation read through another tenant's hotel on another instance → 404 |
+| `test_rate_limit_is_shared_between_limiters_and_keys_are_hashed`, `test_rate_limit_window_slides` | Shared sliding window; keys hold SHA-256 digests, not raw IPs |
+| `test_idempotency_runs_once_across_stores`, `test_idempotency_reports_in_progress_after_wait_budget`, `test_lock_store_across_clients` | Idempotency lease and lock store across Redis clients |
+| `test_conversation_repository_cas_and_native_ttl` | Compare-and-set on `version`, native TTL |
+| `test_readiness_fails_when_redis_is_unreachable`, `test_conversation_store_outage_is_503_state_unavailable`, `test_rate_limiter_fails_open_when_redis_is_down` | `/ready` 503, 503 `STATE_UNAVAILABLE`, limiter fails open |
 
-The same behaviours are also covered by integration tests against a real Redis 7.4 container with three in-process app replicas (`tests/integration/test_redis_state.py`: 6 concurrent turns → 12 messages; 9 concurrent duplicate bookings → 1 booking id created on exactly 1 replica; shared IP limit 6 of 9; cross-tenant read on another replica → 404; readiness 503 when Redis is unreachable; limiter fails open; 503 `STATE_UNAVAILABLE` on outage) and real PostgreSQL 17 (`tests/integration/test_postgres.py`). CI runs them in the `integration` job with service containers.
+**Historical evidence:** these Redis tests (against Redis 7.4) and `tests/integration/test_postgres.py` (against PostgreSQL 17: forced RLS, composite foreign keys, non-superuser app role, tenant-scoped audit events, one `BookingConfirmed` per idempotent booking, retention) passed when **verified locally once; not run in CI**. What they do not cover: separate OS processes or hosts, a load balancer, process shutdown under traffic, and HTTP-edge behaviour.
 
 ## 7. Incident response
 
@@ -307,14 +273,14 @@ Log query examples use `jq` over the JSON log stream (`LOG_FORMAT=json`), where 
 
 - **Signals:** `/ready` 200 with `checks.reservations: "degraded"` (the instance deliberately stays in rotation); `assistant_fallback_total{reason="reservation_unavailable"}` (named `availability_unavailable` before the hardening phase); `tool_failures_total{tool="check_availability",error_code=~"TIMEOUT|DEPENDENCY_UNAVAILABLE"}`; 503 `RESERVATION_UNAVAILABLE` on `route=~".*/availability"`; turn responses with `meta.degradation.code = "RESERVATION_UNAVAILABLE"`.
 - **Diagnose:** `jq 'select(.message=="tool_audit" and .tool=="check_availability") | {ts, status, error_code, latency_ms}'`. Latencies around 15–16 s point to slow timeouts exhausting the retry deadline; fast `DEPENDENCY_UNAVAILABLE` means the breaker is open (or, during half-open, another caller holds the single trial permit). Latencies near 20 s with `TIMEOUT` mean the tool timeout fired before the reservation deadline: check whether `RESERVATION_TIMEOUT_SECONDS`/`RESERVATION_READ_RETRIES` were raised (§4). Check whether the problem is one hotel or all hotels (`hotel_id` context field). With several replicas, each breaker opens independently.
-- **Mitigate:** Nothing to fail over to; the safe reply already sends guests to the hotel contact line. If the PMS is slow rather than down, lower `RESERVATION_TIMEOUT_SECONDS` and `RESERVATION_READ_RETRIES` to free threads. Readiness doesn't eject pods for this, so don't "fix" it by restarting or draining replicas. If the 5xx are 500s rather than 503s, the error is non-transient (e.g. bad PMS credentials or mapping): escalate to the integration owner.
+- **Mitigate:** Nothing to fail over to; the safe reply already sends guests to the hotel contact line. If the PMS is slow rather than down, lower `RESERVATION_TIMEOUT_SECONDS` and `RESERVATION_READ_RETRIES` to free threads. Readiness doesn't take instances out of rotation for this, so don't "fix" it by restarting or draining instances. If the 5xx are 500s rather than 503s, the error is non-transient (e.g. bad PMS credentials or mapping): escalate to the integration owner.
 - **Follow-up:** Record PMS vendor incident; review per-hotel breaker need ([RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md)).
 
 ### Runbook: Redis outage (`STATE_BACKEND=redis`)
 
 - **Signals:** `/ready` 503 with `checks.state: "failing"` on **all** replicas; 503 `STATE_UNAVAILABLE` (`Retry-After: 5`) on conversation endpoints; `state_backend_error` ERROR logs; `state_backend_errors_total{component="rate_limiter"}` rising and `rate_limiter_unavailable` WARNING logs; `idempotency_store_unavailable` ERROR logs if bookings are attempted.
-- **Behaviour to expect:** chat is unavailable (conversations and turn locks live in Redis). The rate limiter **fails open**, so limits are not enforced while Redis is down. Bookings fail closed. Conversations have a native Redis TTL; if Redis lost its data (the scale compose file runs Redis without persistence), guests get `CONVERSATION_NOT_FOUND` and start a new chat.
-- **Diagnose:** Check Redis health (`redis-cli ping` from inside the network; Redis publishes no host port in the compose stack), memory (`maxmemory 256mb`, `noeviction` in the scale file: a full Redis rejects writes), and network between replicas and Redis. The app uses 2 s socket timeouts, so a slow Redis looks like an outage.
+- **Behaviour to expect:** chat is unavailable (conversations and turn locks live in Redis). The rate limiter **fails open**, so limits are not enforced while Redis is down. Bookings fail closed. Conversations have a native Redis TTL; if Redis lost its data (for example a Redis without persistence), guests get `CONVERSATION_NOT_FOUND` and start a new chat.
+- **Diagnose:** Check Redis health (`redis-cli ping` from a host that can reach it), memory (with a `noeviction` policy a full Redis rejects writes; the repository ships no Redis configuration), and network between the backend and Redis. The app uses 2 s socket timeouts, so a slow Redis looks like an outage.
 - **Mitigate:** Restore Redis. Because the limiter is open during the outage, watch the edge for abuse and apply edge rate limits if needed. Don't switch a multi-replica deployment to `STATE_BACKEND=memory` as a workaround: guests would get 404s as requests move between replicas and limits would multiply by the replica count.
 - **Follow-up:** Review Redis capacity and HA for the target deployment ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
@@ -322,20 +288,20 @@ Log query examples use `jq` over the JSON log stream (`LOG_FORMAT=json`), where 
 
 - **Signals:** `/ready` body `checks.audit_store: "failing"` (HTTP stays 200); `audit_write_failed` ERROR logs; `audit_events_total{outcome="failed"}` or `{outcome="dropped"}` increasing while `{outcome="written"}` stalls.
 - **Behaviour to expect:** guest traffic is unaffected. Events are buffered in a bounded in-memory queue (10,000) per replica; a failed batch is lost and counted as `failed`, and events arriving while the queue is full are lost and counted as `dropped`. This is a best-effort audit trail, not a transactional outbox. The same events still appear as `domain_event` log lines.
-- **Diagnose:** Check database reachability and credentials for the app role, and that migrations ran (`python -m app.db.migrate` is the one-shot `migrate` job in the scale compose file; a checksum mismatch on an edited migration fails it). `audit_store` recovers to `ok` after the next successful batch.
+- **Diagnose:** Check database reachability and credentials for the app role, and that migrations ran (`python -m app.db.migrate`, run as the owner role; a checksum mismatch on an edited migration fails it). `audit_store` recovers to `ok` after the next successful batch.
 - **Mitigate:** Restore the database. Recover lost events from the `domain_event` log stream if the audit trail must be complete.
 - **Follow-up:** Alert on `increase(audit_events_total{outcome=~"dropped|failed"}[15m]) > 0` (proposed); size the retention job (`python -m app.db.retention`, `AUDIT_RETENTION_DAYS=365`).
 
 ### Runbook: knowledge unavailable or conversation busy spikes
 
-- **`KNOWLEDGE_UNAVAILABLE` (503):** a hotel's `hotel.json` is corrupt, unreadable or declares the wrong hotel id. `jq 'select(.message|startswith("knowledge_load_failed"))'` names the hotel. `/ready` is 503 on every replica serving that image. Roll back the content or image change.
+- **`KNOWLEDGE_UNAVAILABLE` (503):** a hotel's `hotel.json` is corrupt, unreadable or declares the wrong hotel id. `jq 'select(.message|startswith("knowledge_load_failed"))'` names the hotel. `/ready` is 503 on every instance serving that content. Roll back the content or code change.
 - **`CONVERSATION_BUSY` (409):** a turn couldn't get the conversation lock within `CONVERSATION_LOCK_WAIT_SECONDS`, or its save lost the version check (`conversation_conflicts_total`). Occasional 409s come from double submits; a sustained rise usually means turns are holding locks for a long time (slow LLM) — see the LLM runbook.
 
 ### Runbook: elevated fallback or guardrail rates (possible prompt/model regression)
 
 - **Signals:** `assistant_fallback_total{reason=~"invalid_output|invalid_tool_call|truncated|refusal"}` or `guardrail_interventions_total{guardrail=~"uncited_answer|unknown_source|unsupported_price|availability_claim|unsupported_claim"}` rising after a deploy.
 - **Diagnose:** Split by version: `jq 'select(.message=="ai_trace") | [.prompt_version, .model, .fallback_reason, (.guardrails|join(","))] | @tsv' | sort | uniq -c`. Check whether one `prompt_version`, `tool_schema_version`, `model` or `knowledge_version` accounts for the increase. A single hotel with a new `knowledge_version` points to content, not the prompt.
-- **Mitigate:** Roll back to the previous image (the prompt lives in code: `PROMPT_VERSION = guest-assistant@<revision>+<hash>`) or to the previous `LLM_MODEL` / `ANTHROPIC_MODEL`. For a single tenant, set its `ai_assistant_enabled` flag to false.
+- **Mitigate:** Roll back to the previous code revision (the prompt lives in code: `PROMPT_VERSION = guest-assistant@<revision>+<hash>`) or to the previous `LLM_MODEL` / `ANTHROPIC_MODEL`. For a single tenant, set its `ai_assistant_enabled` flag to false.
 - **Follow-up:** Reproduce with `python -m evals.run_evals --mode ai --label <model>-<date>` (or the manual `live-ai-eval.yml` workflow) and add the failing case to `evals/scenarios.json`. Don't add it to `evals/holdout.json`, which is kept out of prompt tuning.
 
 ### Runbook: suspected prompt-injection campaign
@@ -354,15 +320,15 @@ Log query examples use `jq` over the JSON log stream (`LOG_FORMAT=json`), where 
 
 ### Runbook: credential leak
 
-- **Signals:** Key found in logs, repo, image or a guest reply (`secret_leak` guardrail); unexpected provider usage.
-- **Mitigate:** Rotate the affected credential immediately at the source (`LLM_API_KEY`, `ANTHROPIC_API_KEY`, `ADMIN_API_TOKENS`, or the Redis/PostgreSQL passwords embedded in `REDIS_URL`/`DATABASE_URL`); redeploy with new secrets (runtime env only, never baked into images). Purge affected log ranges in the log backend.
-- **Diagnose/audit:** Log redaction covers `sk-`/`sk-ant-` keys, bearer tokens, PEM private keys, `key/password/secret/token=` pairs, and the configured secret values (≥ 8 chars, including the passwords in `REDIS_URL` and `DATABASE_URL`). Look for leaks outside that coverage (e.g. a new secret format). Run `python -m scripts.scan_secrets --git` (tracked files), `python -m scripts.scan_secrets <path>` (e.g. `frontend/dist`) or `--tar <exported-image.tar>` (image filesystem) from `backend/`; it reports file and pattern names, never values. Review provider usage logs for the exposure window.
+- **Signals:** Key found in logs, repo, built bundle or a guest reply (`secret_leak` guardrail); unexpected provider usage.
+- **Mitigate:** Rotate the affected credential immediately at the source (`LLM_API_KEY`, `ANTHROPIC_API_KEY`, `ADMIN_API_TOKENS`, or the Redis/PostgreSQL passwords embedded in `REDIS_URL`/`DATABASE_URL`); restart with new secrets (runtime environment only, never committed). Purge affected log ranges in the log backend.
+- **Diagnose/audit:** Log redaction covers `sk-`/`sk-ant-` keys, bearer tokens, PEM private keys, `key/password/secret/token=` pairs, and the configured secret values (≥ 8 chars, including the passwords in `REDIS_URL` and `DATABASE_URL`). Look for leaks outside that coverage (e.g. a new secret format). Run `python -m scripts.scan_secrets --git` (tracked files), or `python -m scripts.scan_secrets <path>` (e.g. `frontend/dist`) from `backend/`; it reports file and pattern names, never values. Review provider usage logs for the exposure window.
 - **Follow-up:** Add the pattern to `_SECRET_PATTERNS` (log redaction) and to `PATTERNS` in `scripts/scan_secrets.py`; add a test.
 
 ### Runbook: rate-limit misfires
 
 - **Signals:** `rate_limited_total{dimension}` spike without matching abuse; guest 429 complaints.
-- **Diagnose:** Responses carry `Retry-After` and `details.dimension`. `dimension="ip"` or `"ip_burst"` spiking for everyone usually means all traffic appears to come from one IP: `TRUST_PROXY_HEADERS` is false behind a proxy, or the proxy doesn't overwrite `X-Forwarded-For` (nginx here does). Guests sharing one hotel Wi-Fi also share an IP; that is why the burst default was relaxed from 15 per 5 s to 30 per 10 s after parallel Playwright runs from one IP hit it. `dimension="tenant"` (3000/min) or `"hotel"` (1200/min) means a tenant or hotel is unusually busy (large group or bot). Order: `ip_burst` and `ip` first, before hotel resolution (so probing unknown hotel ids is limited), and also on admin endpoints; then tenant, hotel, and conversation (keyed `{hotel_id}:{conversation_id}`, so ids sent to another hotel can't drain this hotel's budget). Each accepted check records a hit, so a request rejected at a later dimension still consumed earlier budgets. Admin tooling behind the same egress IP as guests shares the IP budget. With `STATE_BACKEND=memory` and several replicas, limits multiply by the replica count; with Redis they are shared. The opposite symptom (no 429s during abuse) can mean Redis is failing and the limiter is open: check `state_backend_errors_total{component="rate_limiter"}`.
+- **Diagnose:** Responses carry `Retry-After` and `details.dimension`. `dimension="ip"` or `"ip_burst"` spiking for everyone usually means all traffic appears to come from one IP: `TRUST_PROXY_HEADERS` is false behind a proxy, or the proxy doesn't overwrite `X-Forwarded-For` (no proxy configuration ships with this repository; the hosting edge must overwrite it). Guests sharing one hotel Wi-Fi also share an IP; that is why the burst default was relaxed from 15 per 5 s to 30 per 10 s after parallel Playwright runs from one IP hit it. `dimension="tenant"` (3000/min) or `"hotel"` (1200/min) means a tenant or hotel is unusually busy (large group or bot). Order: `ip_burst` and `ip` first, before hotel resolution (so probing unknown hotel ids is limited), and also on admin endpoints; then tenant, hotel, and conversation (keyed `{hotel_id}:{conversation_id}`, so ids sent to another hotel can't drain this hotel's budget). Each accepted check records a hit, so a request rejected at a later dimension still consumed earlier budgets. Admin tooling behind the same egress IP as guests shares the IP budget. With `STATE_BACKEND=memory` and several replicas, limits multiply by the replica count; with Redis they are shared. The opposite symptom (no 429s during abuse) can mean Redis is failing and the limiter is open: check `state_backend_errors_total{component="rate_limiter"}`.
 - **Mitigate:** Fix proxy trust configuration; raise the specific limit via env and restart.
 - **Follow-up:** Consider edge/gateway limits in addition to the Redis limiter.
 
@@ -372,22 +338,22 @@ CI (`.github/workflows/ci.yml`, on push to main/master and PRs). **Neither workf
 
 | Gate | Job |
 |---|---|
-| `ruff` lint; pytest: unit, contract, security and API tests (integration tests skip without services) | backend |
+| `ruff` lint; pytest: unit, contract, security and API tests (`tests/integration` skips: CI sets neither `TEST_REDIS_URL` nor `TEST_DATABASE_URL`) | backend |
 | Offline eval (development suite 28/28 with 6 AI-only scenarios skipped, critical 14/14, at last local run): `python -m evals.run_evals --mode offline --label ci-offline --baseline evals/results/offline.json`. Exit 3 if a scenario that passed in the baseline now fails; exit 1 if any scenario fails | backend |
 | `pip-audit -r requirements.txt` | backend |
-| `tests/integration` against Redis 7.4 and PostgreSQL 17 service containers (shared state, three in-process replicas, migrations, RLS, audit, retention) | integration |
 | Secret scan of every tracked file (`scan_secrets.py --git`); no committed `.env` files | security |
 | `oxlint`, type check + build, Vitest, secret scan of the built bundle, `npm audit --omit=dev --audit-level=high` | frontend |
 | Playwright E2E with AI disabled | e2e |
-| `docker compose build`; images run as non-root and the exported backend filesystem has no credentials or `.env`; single-instance stack + `verify_stack`; 3-replica stack + `verify_stack --expect-shared-state`, simultaneous booking probe, graceful stop (§6, Multi-replica verification) | docker |
+
+Not gated in CI: the Redis/PostgreSQL integration tests (§6, Multi-replica verification), shutdown behaviour, and any HTTP-edge checks (CSP, `Permissions-Policy`, HSTS belong to the hosting edge, which isn't in this repository). Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally.
 
 Manual live eval (`.github/workflows/live-ai-eval.yml`, `workflow_dispatch`): inputs `provider` (`glm` \| `anthropic`), `model` (blank = provider default) and `gate` (baseline regression gate); secrets from the protected `ai-evaluation` environment; inputs are sanitised in the shell; results uploaded as `live-ai-eval-results`. Standard CI needs no LLM secret. The Anthropic path is **NOT VERIFIED (no Anthropic credential)**. Locally, the GLM adapter passed the development suite 34/34 in two runs and the holdout suite 12/12 (critical 10/10); these are GLM runtime results only. Details in [EVALUATION.md](EVALUATION.md).
 
 **Proposed canary and rollback for prompt/model changes:**
 1. Bump `PROMPT_REVISION` (the hash also changes if the template changes) and run the live eval workflow; compare `summary` with the previous result file.
-2. Deploy to a canary slice (one replica or selected tenants, once multi-replica exists). Every `ai_trace` and every API response `meta` carries `prompt_version`, `tool_schema_version`, `knowledge_version`, so canary and baseline can be split.
+2. Deploy to a canary slice (selected tenants via flags today; one instance once the DESIGNED multi-instance topology exists). Every `ai_trace` and every API response `meta` carries `prompt_version`, `tool_schema_version`, `knowledge_version`, so canary and baseline can be split.
 3. Watch per-version fallback reasons, guardrail interventions, `llm_latency_ms` and `llm_tokens_total` for ≥ 24 h or ≥ 500 turns (proposed).
-4. Roll back by redeploying the previous image (prompt) or env (`LLM_MODEL` / `ANTHROPIC_MODEL`). No data migration is involved for prompt/model changes. Schema changes go through `python -m app.db.migrate` (ordered, one transaction per migration, SHA-256 checksums, advisory lock against concurrent migrators); see [DEPLOYMENT.md](DEPLOYMENT.md).
+4. Roll back by redeploying the previous code revision (prompt) or env (`LLM_MODEL` / `ANTHROPIC_MODEL`). No data migration is involved for prompt/model changes. Schema changes go through `python -m app.db.migrate` (ordered, one transaction per migration, SHA-256 checksums, advisory lock against concurrent migrators); see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## 9. Disaster recovery (proposed)
 
@@ -395,10 +361,10 @@ All RPO/RTO values: **Proposed target (not measured in production)**.
 
 | Data | Where it lives today | Backup scope | Proposed RPO | Proposed RTO |
 |---|---|---|---|---|
-| Knowledge content (`hotel.json`) and inventory (`inventory.json`) | Git + container image | Git is the backup; future admin-edited DB → daily snapshots + PITR | 0 (git) / 15 min (future DB) | 1 h (redeploy image) |
-| Tenant registry (`tenants.json`) | Git + image | Same as knowledge | 0 | 1 h |
+| Knowledge content (`hotel.json`) and inventory (`inventory.json`) | Git (deployed with the code) | Git is the backup; future admin-edited DB → daily snapshots + PITR | 0 (git) / 15 min (future DB) | 1 h (redeploy from git) |
+| Tenant registry (`tenants.json`) | Git (deployed with the code) | Same as knowledge | 0 | 1 h |
 | Bookings | Mock: process memory (lost on restart). Real: PMS/CRS is the system of record | Not backed up here by design; the PostgreSQL `bookings` table exists in schema only (**DESIGNED**) and would get PITR | 5 min (future) | 4 h (future) |
-| Conversations | Process memory or Redis, 24 h TTL (Redis without persistence in the scale compose file) | **None: ephemeral by design** (guest can delete; no long-term storage) | n/a | n/a (guest starts a new chat) |
+| Conversations | Process memory or Redis, 24 h TTL | **None: ephemeral by design** (guest can delete; no long-term storage) | n/a | n/a (guest starts a new chat) |
 | Idempotency records, rate-limit windows, locks | Process memory or Redis | None; losing idempotency records means a replayed booking request is no longer recognised as a duplicate (booking is off by default) | n/a | n/a |
 | Audit events (`domain_event`) | stdout, and PostgreSQL `audit_events` when `DATABASE_URL` is set (best effort, retention job `AUDIT_RETENTION_DAYS=365`) | Database backups with PITR (proposed); no backup is configured today | 5 min | 24 h for query access |
 | Other audit logs (`tool_audit`, `ai_trace`) | stdout only; retention depends on the log shipper (none configured) | Ship to durable log storage with immutable retention | 5 min | 24 h for query access |
@@ -409,5 +375,5 @@ Scenarios:
 - **Reservation provider outage:** safe fallback reply + contact line; nothing to restore.
 - **Redis outage (implemented behaviour):** readiness fails (`state: failing`), chat returns 503 `STATE_UNAVAILABLE`, the rate limiter fails open, bookings fail closed. After Redis returns, conversations that were lost degrade to "start a new chat". See the Redis runbook (§7).
 - **PostgreSQL outage (implemented behaviour):** not part of readiness; audit events are dropped and counted. No other feature depends on PostgreSQL today.
-- **Region failure (future):** stateless backend redeployed in a second region from the same image; knowledge from git or a replicated DB; conversations lost (acceptable); DNS failover. RTO proposed 4 h.
+- **Region failure (future):** stateless backend redeployed in a second region from the same code revision; knowledge from git or a replicated DB; conversations lost (acceptable); DNS failover. RTO proposed 4 h.
 - **DR test cadence (proposed):** quarterly restore of knowledge/booking DB snapshots into staging; semi-annual game day (LLM off, PMS breaker open, region evacuation); verify `/ready`, smoke tests and the offline eval after each.

@@ -219,7 +219,7 @@ A real-HTTP load test (`python -m perf.load_test`, local benchmark, not producti
 | `/ready` failed during a PMS outage (would remove every replica); `/health` shared the worker thread pool | Reservations reported as degraded; `/health` on the event loop | `test_reservation_outage_degrades_but_keeps_instance_ready`, `test_readiness_fails_when_knowledge_is_unavailable` |
 | Injection signals not visible in metrics or events | `prompt_injection_signals_total`, GuardrailTriggered on flags | `test_injection_signals_are_counted_even_when_not_blocked` |
 | Cache-write tokens not recorded; token metric had no model label | `cache_write_tokens`, `llm_tokens_total{kind,model}` | `test_token_usage_includes_cache_reads_and_writes` |
-| **nginx security headers were not sent** (location `add_header` dropped server-level headers) | Shared snippet included in every location | Verified manually against the running compose stack (no automated test) |
+| **nginx security headers were not sent** (location `add_header` dropped server-level headers) | Fixed at the time with a shared header snippet. nginx and the container setup were later **removed intentionally**; static-hosting headers are now a hosting requirement ([DEPLOYMENT.md](DEPLOYMENT.md)) | — |
 | `.env.example` inline comments became values for empty keys (a copied file would set a bogus API key) | Comments on their own lines | `test_example_env_file_parses_to_safe_defaults` |
 | Workflow input interpolated into a shell command (`ai-eval.yml`, now `live-ai-eval.yml`) | Passed via env and sanitised | Review only |
 

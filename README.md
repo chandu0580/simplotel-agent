@@ -2,15 +2,17 @@
 
 A multi-tenant AI guest assistant for hotel websites. Guests ask about the property, rooms, amenities and policies, and check live availability, all in one conversation. Answers are grounded in each hotel's own knowledge base. Dates, capacity, inventory and prices are always computed by deterministic code, never by the model.
 
-The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation, shared state for multiple replicas and container packaging. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
+The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation and optional shared-state adapters (Redis, PostgreSQL) behind interfaces. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
 
 ## Status
 
 | | |
 |---|---|
-| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, PII masking before the model, offline fallback, GLM and Anthropic provider adapters, AI traces, metrics, structured logs, rate limiting (memory or Redis), Redis-backed conversations, idempotency and locks, PostgreSQL schema with row-level security and audit sink, admin RBAC boundary, i18n, Docker (single instance and 3 replicas) |
+| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, PII masking before the model, offline fallback, GLM and Anthropic provider adapters, AI traces, metrics, structured logs, rate limiting, idempotency and conversation locks (in-memory by default), admin RBAC boundary, i18n |
+| **Optional adapters** (behind interfaces) | Redis state adapter (conversations, rate limits, idempotency, locks) and PostgreSQL adapter (migrations, row-level security, audit sink, retention). Integration tests in `backend/tests/integration` were verified locally once against Redis 7.4 and PostgreSQL 17; they skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set and are not run in CI. |
 | **Prototype** (single process, per-process or mock) | In-memory state backend (the default), per-process knowledge and availability cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
+| **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
 | **GLM (default provider)** | Development suite 34/34 in two runs and holdout suite 12/12 with the GLM-native adapter. This is evidence for the GLM runtime only, **not** Claude verification. |
 | **CI** | Workflows are defined; **neither has been run on GitHub**. |
@@ -32,12 +34,14 @@ Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](doc
 ## Architecture
 
 ```
-Browser (React + Vite)
+Guest
+   │
+React web app (Vite)
    │  /api/v1/hotels/{hotel_id}/...
    ▼
-nginx ── static SPA · /api proxy · security headers · 64 KB body limit
-   ▼
-FastAPI  ── middleware: request/trace ids · security headers · body size · rate limits · tenant resolution
+FastAPI API ── middleware: request/trace ids · security headers · 64 KB body limit · rate limits
+   │
+TenantContext ── hotel_id → tenant, per-tenant flags and limits
    │
 ConversationService ── server-side context, expiry, locks + compare-and-set versions
    │
@@ -46,53 +50,43 @@ AssistantService ── input guardrails + PII masking ─► AIAssistant (1 LLM
    ├─► ToolRegistry ─► ReservationProvider (resilient wrapper → mock inventory)
    ├─► KnowledgeProvider + Retriever (per-hotel JSON, content lifecycle)
    └─► LLMProvider (GLM adapter, default · Anthropic adapter · mock for load tests) · ModelRouter
-State: memory (one process) or Redis (conversations, rate limits, idempotency, locks) · PostgreSQL audit trail (optional)
+State (behind interfaces): in-memory by default · optional Redis adapter (conversations, rate limits, idempotency, locks) · optional PostgreSQL audit trail
 Cross-cutting: config & flags · structured logs · AI traces · Prometheus metrics · domain events
 ```
 
-Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md), [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) · Deployment: [DEPLOYMENT](docs/DEPLOYMENT.md)
+Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md), [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) · Running and hosting notes: [DEPLOYMENT](docs/DEPLOYMENT.md)
 
 ## Quick start
 
-### Option A: Docker, single instance
-
-```bash
-docker compose up --build        # http://localhost:8080
-```
-
-Without `LLM_API_KEY` and `LLM_BASE_URL` the assistant runs in offline FAQ mode. To enable AI, put the provider settings (see [Environment](#environment)) in `backend/.env`; the file is read at runtime and never baked into the image.
-
-### Option B: Docker, three replicas with Redis and PostgreSQL
-
-```bash
-export SA_DB_OWNER_PASSWORD=...  SA_DB_APP_PASSWORD=...     # any local values; required, never commit them
-docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
-```
-
-This starts nginx, 3 backend replicas with `STATE_BACKEND=redis`, Redis, PostgreSQL and a one-shot migration job. The application connects to PostgreSQL as a non-superuser role so row-level security applies. Redis and PostgreSQL publish no host ports. It is a local rehearsal of the proposed topology, not a production deployment. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-
-### Option C: Local development
-
-Requirements: Python 3.11+ (developed on 3.13) and Node.js 20+ (developed on 22).
+Requirements: Python 3.11+ (developed on 3.13) and Node.js 20+ (developed on 22). No Docker is needed.
 
 On Windows, clone into a short path (e.g. `C:\dev\simplotel-agent`) or [enable long paths](https://pip.pypa.io/warnings/enable-long-paths). Some Anthropic SDK file names are long enough that `pip install` fails in deeply nested folders.
 
+**Backend**
+
 ```bash
-# Backend
 cd backend
 python -m venv .venv
-# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
-pip install -r requirements-dev.txt
-cp .env.example .env              # optional: add LLM_API_KEY and LLM_BASE_URL
+.venv\Scripts\activate            # Windows
+source .venv/bin/activate          # macOS/Linux
+pip install -r requirements.txt    # for tests and linting: pip install -r requirements-dev.txt
+cp .env.example .env               # optional: add LLM_API_KEY and LLM_BASE_URL
 uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/docs
-
-# Frontend (second terminal)
-cd frontend
-npm install
-npm run dev                       # http://localhost:5173 (proxies /api to :8000)
 ```
 
+**Frontend** (second terminal)
+
+```bash
+cd frontend
+npm install
+npm run dev                        # http://localhost:5173 (Vite proxies /api to :8000)
+```
+
+Without `LLM_API_KEY` and `LLM_BASE_URL` the assistant runs in offline FAQ mode. To enable AI, put the provider settings (see [Environment](#environment)) in `backend/.env`.
+
 To point the UI at the second demo hotel, run `VITE_HOTEL_ID=hotel-blr-001 npm run dev`.
+
+The default configuration keeps all state in memory in one process. The optional adapters are enabled with `STATE_BACKEND=redis` + `REDIS_URL` and `DATABASE_URL` (PostgreSQL, run migrations first); they require Redis and PostgreSQL services you provide. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment
 
@@ -183,7 +177,7 @@ curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/
 | `POST .../conversations/{id}/messages` | Guest turn |
 | `POST .../conversations/{id}/availability` | Form search recorded in the conversation |
 | `POST /api/v1/hotels/{hotel_id}/availability` | Stateless availability search |
-| `GET /health` · `GET /ready` · `GET /metrics` | Liveness · readiness · Prometheus (internal only; not reachable through nginx) |
+| `GET /health` · `GET /ready` · `GET /metrics` | Liveness · readiness · Prometheus (`/metrics` is meant for internal scraping; the hosting edge must not expose it publicly) |
 | `GET /api/v1/admin/tenants/{tenant_id}/hotels[/{hotel_id}/knowledge \| /ai-config]` | Admin, read-only, role- and tenant-scoped |
 | `/api/chat`, `/api/availability`, `/api/hotel`, `/api/health` | Original assignment endpoints for the default hotel; deprecated, still supported |
 
@@ -198,7 +192,7 @@ Every v1 error uses one envelope and never includes a stack trace:
 | Code | Status |
 |---|---|
 | `VALIDATION_ERROR`, `INVALID_BOOKING_DETAILS` | 422 |
-| `PAYLOAD_TOO_LARGE` | 413 (body over 64 KB; also enforced by nginx) |
+| `PAYLOAD_TOO_LARGE` | 413 (body over 64 KB) |
 | `METHOD_NOT_ALLOWED` | 405 |
 | `NOT_FOUND`, `HOTEL_NOT_FOUND`, `CONVERSATION_NOT_FOUND` | 404 |
 | `UNAUTHORIZED` | 401 (`details: [{"reason": "auth_not_configured"}]` when admin auth is disabled) |
@@ -220,7 +214,8 @@ cd backend
 python -m pytest                                  # unit, contract, security and API tests
 ruff check app tests evals scripts perf
 
-# Integration tests against real Redis and PostgreSQL (skipped when the variables are unset)
+# Optional-adapter integration tests against Redis and PostgreSQL you run yourself
+# (skipped when the variables are unset; not run in CI)
 TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
 TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres \
 python -m pytest tests/integration -rs
@@ -234,12 +229,8 @@ python -m evals.run_evals --mode ai --label <label> --provider-note "..."       
 python -m perf.benchmark                          # in-process overhead profile
 python -m perf.load_test                          # real HTTP load test; only ever uses LLM_PROVIDER=mock
 
-# Running stack checks (through nginx on :8080)
-python -m scripts.verify_stack                    # single instance
-python -m scripts.verify_stack --expect-shared-state   # 3-replica stack
-
 # Secret scan (reports file and pattern names only)
-python -m scripts.scan_secrets --git              # tracked files; also: PATH..., --tar image-fs.tar
+python -m scripts.scan_secrets --git              # tracked files; also: PATH... (e.g. the frontend dist/)
 
 cd ../frontend
 npm test                                          # component tests
@@ -251,7 +242,7 @@ Totals from the latest run: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READI
 
 ### CI
 
-- **`.github/workflows/ci.yml`** needs no LLM secret. Jobs: backend (ruff, pytest, offline eval gate, pip-audit); integration (Redis and PostgreSQL service containers, `tests/integration`); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, npm audit); e2e (Playwright); docker (build, non-root and image secret scan, single-instance `verify_stack`, 3-replica `verify_stack --expect-shared-state`, simultaneous booking probe across replicas, graceful stop).
+- **`.github/workflows/ci.yml`** needs no LLM secret and no Docker. Four jobs: backend (ruff, pytest, offline eval gate, pip-audit); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, npm audit); e2e (Playwright against the real backend and frontend, AI disabled). The optional Redis/PostgreSQL integration tests skip in CI.
 - **`.github/workflows/live-ai-eval.yml`** is manual (`workflow_dispatch`): provider `glm` or `anthropic`, secrets from the protected `ai-evaluation` environment, inputs sanitised, optional baseline gate, results uploaded as artifacts.
 
 **Neither workflow has been run on GitHub.**
@@ -281,16 +272,16 @@ Details, root-cause analysis and history: [docs/EVALUATION.md](docs/EVALUATION.m
 
 ## Security
 
-- **Credentials:** held only by the backend, read from the environment, and redacted in logs. The secret scanner found none in tracked files, the frontend bundle or the backend image filesystem.
+- **Credentials:** held only by the backend, read from the environment, and redacted in logs. The secret scanner found none in tracked files or the frontend bundle.
 - **Guardrails:**
   - Input: exfiltration attempts blocked before the model; injection attempts flagged and counted; prompt tags neutralised.
   - Output: secret/prompt leakage, uncited answers, unsupported prices and inventory claims.
   - Tools: the model can only request exposed read-only tools.
 - **Privacy:** card numbers (Luhn-valid) are always masked, and emails and phone numbers by default, before text reaches the model, the stored transcript or traces. Names and addresses are not detected. See [docs/PRIVACY.md](docs/PRIVACY.md).
-- **Isolation:** tenant-scoped data access with isolation tests; PostgreSQL row-level security forced on every table and composite tenant keys, tested against a real database.
+- **Isolation:** tenant-scoped data access with isolation tests; optional PostgreSQL adapter with row-level security forced on every table and composite tenant keys (verified locally once against PostgreSQL 17; not run in CI).
 - **Admin API:** refuses until real auth is configured; RBAC with tenant and hotel scoping.
-- **HTTP hygiene:** rate limits, CORS allow-list, 64 KB body limit, security headers from the API and nginx (CSP, Permissions-Policy and others; HSTS is not sent over plain HTTP), production configuration validation.
-- **Containers:** non-root, read-only filesystem, capabilities dropped, digest-pinned base images.
+- **HTTP hygiene:** rate limits, CORS allow-list, 64 KB body limit, production configuration validation, and security headers set by the backend middleware (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store`, HSTS in production).
+- **Hosting requirement (not implemented in this repo):** whatever serves the built SPA in a real deployment must set `Content-Security-Policy`, `Permissions-Policy` and, at TLS termination, `Strict-Transport-Security`.
 
 Threats, residual risks and roadmap: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
@@ -306,7 +297,7 @@ Structured JSON logs carry request, trace, tenant, hotel, conversation and chann
 
 - **Unverified:** the live Anthropic API has not been called, and the CI workflows have never run on GitHub. GLM results do not verify Claude.
 - **Mocked:** availability and bookings use a mock provider. There is no PMS integration or payment flow ([RESERVATION_INTEGRATION](docs/RESERVATION_INTEGRATION.md)).
-- **Partly persistent:** with `STATE_BACKEND=redis`, conversations, rate limits, idempotency and locks are shared across replicas. PostgreSQL stores only the audit trail; the other tables exist as schema only. Knowledge and availability caches stay per process by design.
+- **Partly persistent:** with the optional `STATE_BACKEND=redis` adapter, conversations, rate limits, idempotency and locks are shared across processes. PostgreSQL stores only the audit trail; the other tables exist as schema only. Knowledge and availability caches stay per process by design.
 - **Authentication:** admin authentication is not production-grade (development static tokens only); guest chat is unauthenticated by design.
 - **Offline mode is literal:** it matches keywords, answers in English only, and recognises ISO dates only.
 - **Hindi UI strings are a draft** that needs native review.
@@ -337,7 +328,7 @@ Migration path and scaling stages: [docs/ENTERPRISE_ARCHITECTURE.md](docs/ENTERP
 | [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md) | Target architecture, tenancy, data model, scalability, migration |
 | [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) | Request lifecycles and failure paths (sequence diagrams) |
 | [CONFIGURATION](docs/CONFIGURATION.md) | Every setting, defaults and production validation |
-| [DEPLOYMENT](docs/DEPLOYMENT.md) | Single-instance and multi-replica stacks, migrations, verification |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | Running locally, optional Redis/PostgreSQL adapters, migrations, hosting requirements |
 | [PERFORMANCE](docs/PERFORMANCE.md) | Local load-test method and results |
 | [PRIVACY](docs/PRIVACY.md) | PII masking, data minimisation, retention and deletion |
 | [RESERVATION_INTEGRATION](docs/RESERVATION_INTEGRATION.md) | Reservation boundary, resilience, idempotency, PMS integration path |

@@ -1,8 +1,7 @@
-"""Scan files for credentials. Used by CI on tracked files, the frontend bundle and the backend image filesystem.
+"""Scan files for credentials. Used by CI on tracked files and the built frontend bundle.
 
     python -m scripts.scan_secrets --git                 # every git-tracked file in the repository
     python -m scripts.scan_secrets PATH [PATH ...]       # files or directories (e.g. frontend/dist)
-    python -m scripts.scan_secrets --tar image-fs.tar    # an exported container filesystem
 
 Reports file and pattern name only; never prints the matched value. Exit code 1 if anything matches.
 Patterns are deliberately specific (provider key prefixes, private keys, credentials in URLs) to keep
@@ -15,7 +14,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tarfile
 
 PATTERNS = {
     "anthropic_key": re.compile(rb"sk-ant-[A-Za-z0-9_\-]{20,}"),
@@ -64,26 +62,14 @@ def iter_git() -> Iterator[tuple[str, bytes]]:
     yield from iter_paths(n.decode() for n in names if n and Path(n.decode()).is_file())
 
 
-def iter_tar(path: str) -> Iterator[tuple[str, bytes]]:
-    with tarfile.open(path) as tar:
-        for member in tar:
-            if member.isfile() and member.size <= MAX_BYTES and not member.name.startswith(("usr/share/", "usr/lib/", "var/lib/")):
-                handle = tar.extractfile(member)
-                if handle:
-                    yield member.name, handle.read()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--git", action="store_true")
-    parser.add_argument("--tar")
     args = parser.parse_args()
     sources: list[Iterator[tuple[str, bytes]]] = []
     if args.git:
         sources.append(iter_git())
-    if args.tar:
-        sources.append(iter_tar(args.tar))
     if args.paths:
         sources.append(iter_paths(args.paths))
     scanned, findings = 0, []

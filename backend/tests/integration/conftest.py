@@ -1,6 +1,6 @@
 """Integration tests against real Redis and PostgreSQL.
 
-They run only when the services are provided (CI starts them as service containers):
+They run only when these optional services are available (they are not part of CI or the default local setup):
     TEST_REDIS_URL=redis://127.0.0.1:6379/15
     TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres
 Each test uses a unique Redis key prefix / a throwaway database, so runs don't interfere.

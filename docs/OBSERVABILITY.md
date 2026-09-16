@@ -27,7 +27,7 @@ flowchart LR
 
 ### 1.1 Structured logs (`app/core/observability.py`)
 
-- **Format:** `LOG_FORMAT=json` (required when `APP_ENV=production`; the backend image sets it) or `text`. JSON keys: `ts`, `level`, `logger`, `message`, the context fields, all event fields merged at top level, and `exception` when present.
+- **Format:** `LOG_FORMAT=json` (required when `APP_ENV=production`; set it in the process environment) or `text`. JSON keys: `ts`, `level`, `logger`, `message`, the context fields, all event fields merged at top level, and `exception` when present.
 - **Event name** is the `message` value for `log_event(...)` calls.
 - **Context fields**, bound per request via contextvars and copied into integration threads: `request_id`, `trace_id`, `tenant_id`, `hotel_id`, `conversation_id`, `channel`.
 - **Context propagation fix.** Guest endpoints are sync handlers, so they run in a worker thread with a *copy* of the request context. `bind_context` used to set a new dict in that copy, so ids bound during tenant resolution never reached the middleware, and the `http_request` access log lacked `tenant_id`, `hotel_id` and `conversation_id`. `bind_context` now updates the request's context dict in place, so ids bound inside worker threads appear on the access log. Asserted by `tests/test_observability.py::test_access_log_and_trace_carry_full_request_context`.
@@ -91,7 +91,7 @@ There is no `decision` field. Derive it the way `evals/run_evals.py::decision_of
 
 ### 1.3 Prometheus metrics (`app/core/metrics.py`)
 
-Exposed on `GET /metrics` (internal network only; nginx doesn't proxy it, and `scripts/verify_stack.py` checks that it isn't reachable through the edge). A dedicated `CollectorRegistry` per container is used, so **no default `process_*`/`python_*` collectors are exported**; get CPU/memory from the container runtime. Each replica has its own registry: scrape every replica. Histogram buckets (ms): standard `5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 45000`; fine (for sub-millisecond work) `0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250`.
+Exposed on `GET /metrics` on the backend port. The endpoint has no authentication; keeping it off the public edge is a hosting requirement (no edge or proxy configuration ships with this repository, and nothing automated checks it). `METRICS_ENABLED=false` returns 404. A dedicated `CollectorRegistry` per app instance (the dependency `Container`) is used, so **no default `process_*`/`python_*` collectors are exported**; get CPU/memory from the host (node/OS-level monitoring). If several backend processes are ever run (DESIGNED/future), each has its own registry: scrape every process. Histogram buckets (ms): standard `5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 45000`; fine (for sub-millisecond work) `0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250`.
 
 This table lists every metric defined in `app/core/metrics.py`.
 
@@ -144,7 +144,7 @@ Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversat
 
 ### 1.5 Request ids and trace context
 
-- `X-Request-ID` is accepted if it matches `^[A-Za-z0-9._\-]{1,64}$`; otherwise a 16-hex id is generated. It is echoed in the response header and error bodies. nginx sets it to its own `$request_id`.
+- `X-Request-ID` is accepted if it matches `^[A-Za-z0-9._\-]{1,64}$`; otherwise a 16-hex id is generated. It is echoed in the response header and error bodies. A hosting edge may set it; no edge configuration ships with this repository.
 - A W3C `traceparent` header (`00-<32hex>-<16hex>-<2hex>`) supplies `trace_id`; otherwise a random 32-hex id is used. **Only the trace-id is kept**: the parent span id is dropped and nothing is propagated outbound (LLM, PMS). CORS allows `traceparent` and `X-Request-ID`.
 - `POST .../messages` responses include `meta.trace_id`, `prompt_version`, `tool_schema_version`, `knowledge_version` and `degradation` (`{code, message}` or null), so a support ticket can be joined to its `ai_trace`.
 - Error responses use the envelope `{"error": {"code", "message", "request_id", "details"}}`; `request_id` joins them to the `http_request` log line.
@@ -164,7 +164,9 @@ Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversat
 | Events carry no guest text | serialised events contain no passport number or message words; PostgreSQL `audit_events` rows contain no guest text or phone digits | `test_platform.py::test_events_never_contain_guest_message_text`; `tests/integration/test_postgres.py::test_app_with_database_url_records_audit_events_and_reports_readiness` |
 | Rate limiter fail-open hook | a Redis error allows the request and calls the error callback (the callback that increments `state_backend_errors_total` is wired in `container.py`) | `tests/integration/test_redis_state.py::test_rate_limiter_fails_open_when_redis_is_down` |
 
-**Not asserted by any test:** the metric values of `state_backend_errors_total`, `conversation_conflicts_total` and `audit_events_total` (their code paths are exercised, but no test reads the counters), `pii_masked_total` for `email`/`phone`, and the `shutdown_complete` log (checked by grep in the CI docker job, which hasn't run on GitHub).
+The two `tests/integration/` rows skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set, so they are **not run in CI**; they passed when verified locally once (Redis 7.4, PostgreSQL 17).
+
+**Not asserted by any test:** the metric values of `state_backend_errors_total`, `conversation_conflicts_total` and `audit_events_total` (their code paths are exercised, but no test reads the counters), `pii_masked_total` for `email`/`phone`, and the `shutdown_complete` log emitted by the FastAPI lifespan.
 
 ## 2. Dashboards (proposed)
 
@@ -215,7 +217,7 @@ jq -r 'select(.message=="ai_trace")
 
 | Panel | Query / source |
 |---|---|
-| CPU, memory | Container runtime (cAdvisor `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`), proposed. The app exports no process metrics |
+| CPU, memory | Host-level monitoring of the backend process (e.g. node_exporter), proposed. The app exports no process metrics |
 | Request rate by route | `sum by (route) (rate(request_latency_ms_count[5m]))` |
 | 5xx rate by route | `sum by (route) (rate(request_latency_ms_count{status_class="5xx"}[5m]))` |
 | 429 rate | `sum by (dimension) (rate(rate_limited_total[5m]))` |
@@ -225,8 +227,8 @@ jq -r 'select(.message=="ai_trace")
 | Shared-state errors (limiter failing open) | `sum by (component) (rate(state_backend_errors_total[5m]))` |
 | Conversation conflicts | `rate(conversation_conflicts_total[5m])`; 409s by route: `sum by (route) (rate(request_latency_ms_count{status_class="4xx"}[5m]))` (no per-status label) |
 | Audit trail health | `sum by (outcome) (rate(audit_events_total[5m]))` |
-| Container restarts | Orchestrator (`kube_pod_container_status_restarts_total`) or `docker inspect` `RestartCount`, proposed |
-| Readiness | Blackbox probe of `/ready` per replica, proposed: status code (`knowledge`, `state`) **and** body `checks.reservations`, `checks.audit_store` |
+| Process restarts | Count of `startup` log events per host, proposed |
+| Readiness | Blackbox probe of `/ready` per backend process, proposed: status code (`knowledge`, `state`) **and** body `checks.reservations`, `checks.audit_store` |
 
 ## 3. Proposed alerts
 
@@ -308,7 +310,7 @@ GLM results are evidence for the GLM runtime only, **not Claude**. The Anthropic
 - **Sentry:** attach the Sentry logging integration to `ERROR` records (`llm_failure`, `unhandled_error`, `tool_crashed`) with `request_id`/`trace_id` tags; set `send_default_pii=False`.
 - **Events:** replace `LoggingEventPublisher` with an outbox table + broker publisher (`EventPublisher` protocol) for analytics and notifications; keep the event schema free of message text.
 - **Log shipping:** stdout JSON → Fluent Bit/Vector → log store. Index `message`, `tenant_id`, `hotel_id`, `conversation_id`, `request_id`, `trace_id`, `prompt_version`, `name`.
-- **Metrics:** Prometheus scrape of `/metrics` per pod over the internal network; keep it off the public edge.
+- **Metrics:** Prometheus scrape of `/metrics` per backend process over a private network; keep it off the public edge.
 
 **Cardinality guidance:** metric labels must be bounded enums (`channel`, `mode`, `reason`, `tool`, `error_code`, `guardrail`, `flag`, `kind`, `route` template, `status_class`). `model` on `llm_tokens_total` is acceptable because it is bounded by configured routes; don't copy arbitrary provider-returned strings into other labels. Never label by tenant, hotel, conversation, request, model version strings from free text, or raw paths. Put high-cardinality dimensions in logs/traces. `prompt_version` could be a label only if limited to a few concurrent values; logs are preferred.
 

@@ -1,6 +1,0 @@
-# Scripts and configs run inside Linux containers: keep LF endings on every platform.
-*.sh   text eol=lf
-*.sql  text eol=lf
-*.conf text eol=lf
-*.yml  text eol=lf
-Dockerfile text eol=lf

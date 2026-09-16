@@ -14,11 +14,27 @@ Contents: [1 Topology](#1-runtime-topology) · [2 Message lifecycle](#2-request-
 
 ## 1. Runtime topology
 
+Product architecture:
+
 ```mermaid
 flowchart LR
-    B["Browser: React SPA"] -->|"docker compose: /api/*"| N["nginx :8080 (frontend/nginx.conf)"]
-    B -->|"dev: /api/*"| V["Vite dev server :5173 proxy"]
-    N -->|"proxy_pass backend:8000 (1 or N replicas)"| F
+    G["Guest"] --> W["React web app"]
+    W -->|"/api/v1"| API["FastAPI API"]
+    API --> TC["Tenant context"]
+    TC --> CONV["Conversation service"]
+    CONV --> ORCH["AI orchestrator"]
+    ORCH --> KN["Knowledge"]
+    ORCH --> TO["Tools"]
+    ORCH --> GU["Guardrails"]
+    ORCH --> LP["LLM provider"]
+    TO --> RES["Reservation / hotel systems"]
+```
+
+Inside the process:
+
+```mermaid
+flowchart LR
+    B["Browser: React SPA"] -->|"dev: /api/*"| V["Vite dev server :5173 proxy"]
     V -->|"127.0.0.1:8000"| F
     subgraph F["FastAPI process (main.py, container.py)"]
         MW["HTTP middleware + CORS"] --> R["Routers: v1_guest, v1_admin, legacy, ops"]
@@ -33,22 +49,24 @@ flowchart LR
         AS --> KP["JsonKnowledgeProvider"]
         MEM[("Per process: TTLCache (knowledge, availability), circuit breaker, traces/events ring buffers")]
     end
-    CS --> ST[("State: in memory, or Redis (conversations, rate limits, idempotency, locks)")]
-    AS -->|"domain events, async queue"| PG[("PostgreSQL audit_events (optional, DATABASE_URL)")]
+    CS --> ST[("State interfaces: in memory (default), or optional Redis adapter (conversations, rate limits, idempotency, locks)")]
+    AS -->|"domain events, async queue"| PG[("Optional PostgreSQL audit_events (DATABASE_URL)")]
     AI -->|"HTTPS"| LLM["GLM Chat Completions API (default) or Anthropic Messages API"]
     RRP --> MOCK["MockReservationProvider: data/hotels/ID/inventory.json"]
     KP --> KF["data/hotels/ID/hotel.json, data/tenants.json"]
 ```
 
-- **Compose** (`docker-compose.yml`, `frontend/nginx.conf`): nginx serves the built SPA and proxies only `location /api/` to `backend:8000`. It **overwrites** `X-Forwarded-For` with `$remote_addr` and `X-Request-ID` with `$request_id`, and uses `proxy_read_timeout 60s` and `client_max_body_size 64k`. Security headers (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy`, CSP) come from `frontend/security-headers.conf`, copied to `/etc/nginx/snippets/` and included in each of the `/api/`, `/assets/` and `/` locations. It has to be included per location because nginx drops inherited `add_header` directives in any block that sets its own. On `/api/`, `proxy_hide_header` removes the backend's copies of the first three headers so responses don't carry duplicates. HSTS is deliberately not sent over plain HTTP; `frontend/security-headers-tls.conf` is for the TLS edge, and the backend sends HSTS itself when `APP_ENV=production`. The `/healthz` location has no include. The backend runs with `TRUST_PROXY_HEADERS=true`. `/health`, `/ready` and `/metrics` are not under `/api/`, so nginx does not proxy them (they fall through to the SPA's `index.html`).
-- **Multi-replica compose** (`docker-compose.scale.yml`): nginx, 3 backend replicas with `STATE_BACKEND=redis`, Redis, PostgreSQL and a one-shot `migrate` job. nginx resolves `backend` to every replica and round-robins. Setup, verification (`scripts/verify_stack.py --expect-shared-state`) and results are in [DEPLOYMENT.md](DEPLOYMENT.md).
+State stores are implementation details behind interfaces; nothing above the `state/` and `db/` packages depends on which one is wired.
+
+- **Docker/containerization:** NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. An earlier container setup (with an nginx edge) was removed as out of scope.
+- **Hosting requirement (not implemented in this repo):** whatever serves the built SPA in a real deployment must set `Content-Security-Policy`, `Permissions-Policy` and, at TLS termination, `Strict-Transport-Security`, and must not expose `/metrics` publicly. If it sits in front of the API as a reverse proxy, it must overwrite `X-Forwarded-For` before the backend is run with `TRUST_PROXY_HEADERS=true`.
 - **Dev** (`frontend/vite.config.ts`): Vite proxies `/api` to `VITE_PROXY_TARGET` (default `http://127.0.0.1:8000`). `TRUST_PROXY_HEADERS` defaults to `false`, so every browser shares the proxy's socket IP for the per-IP limits.
 - **Composition root** (`container.py`): chooses every implementation.
   - `build_llm_provider` builds a provider only when `Settings.llm_configured` is true: `GLMProvider` for `LLM_PROVIDER=glm` (the default) when `LLM_API_KEY` and `LLM_BASE_URL` are set; `AnthropicProvider` for `LLM_PROVIDER=anthropic` when `ANTHROPIC_API_KEY` is set; `LatencyMockProvider` for `LLM_PROVIDER=mock` (fixed latency, for load tests; rejected in production). `AI_ENABLED=false` or `LLM_PROVIDER=none` also means no provider. Without a provider `AIAssistant` is `None` and the offline engine answers every turn.
   - `build_state` builds in-memory or Redis stores for conversations, locks, rate limiting and idempotency (`STATE_BACKEND`).
   - `PostgresAuditSink` is added as an event publisher when `DATABASE_URL` is set; it syncs tenant and hotel rows from the registry at startup.
   - All settings are listed in [CONFIGURATION.md](CONFIGURATION.md).
-- **Lifespan** (`main.py`): at startup the AnyIO default thread limiter is set to `WORKER_THREADS` (default 150), and the `startup` log records it together with `state_backend`. Every 300 s (`PURGE_INTERVAL_SECONDS`), `purge_expired()` removes expired conversations (a no-op for Redis, which expires keys itself). On shutdown (uvicorn runs with `--timeout-graceful-shutdown 25`), the purge task is cancelled, the audit sink is flushed and closed, the LLM client and Redis client are closed, and `shutdown_complete` is logged.
+- **Lifespan** (`main.py`): at startup the AnyIO default thread limiter is set to `WORKER_THREADS` (default 150), and the `startup` log records it together with `state_backend`. Every 300 s (`PURGE_INTERVAL_SECONDS`), `purge_expired()` removes expired conversations (a no-op for Redis, which expires keys itself). On shutdown (uvicorn first stops accepting connections and drains in-flight requests, bounded by `--timeout-graceful-shutdown` when set), the purge task is cancelled, the audit sink is flushed and closed, the LLM client and Redis client are closed, and `shutdown_complete` is logged.
 
 ---
 
@@ -101,10 +119,10 @@ sequenceDiagram
 
 | Step | Behaviour |
 |---|---|
-| Request id | Accepts `X-Request-ID` only if it matches `^[A-Za-z0-9._\-]{1,64}$`. Otherwise it generates `uuid4().hex[:16]`. In compose, nginx always replaces the header with its own `$request_id`. |
+| Request id | Accepts `X-Request-ID` only if it matches `^[A-Za-z0-9._\-]{1,64}$`. Otherwise it generates `uuid4().hex[:16]`. |
 | Trace id | Parses `traceparent` against `^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$` and uses the 32-hex trace-id. Otherwise it uses `uuid4().hex`. No `traceparent` is sent back or propagated to outbound calls. |
 | Context | `reset_context()`, then `bind_context(request_id, trace_id)` in a `ContextVar` (`core/observability.py`) that every log record reads. Tenant fields are bound later by `resolve_guest_context`, and `conversation_id` by `ConversationService`. `bind_context` updates the request's context dict in place, so ids bound inside the worker thread also appear on the middleware's `http_request` access log. |
-| Body size | A `Content-Length` above 64 KB (or an unparsable one) returns **413 `PAYLOAD_TOO_LARGE`** without calling the endpoint. nginx enforces the same limit at the edge (`client_max_body_size 64k`). |
+| Body size | A `Content-Length` above 64 KB (or an unparsable one) returns **413 `PAYLOAD_TOO_LARGE`** without calling the endpoint. |
 | Unhandled exception | Logs `unhandled_error` with the stack trace (server log only) and returns a structured 500 `INTERNAL_ERROR` in the envelope for that path (see §9). |
 | Response headers | `X-Request-ID`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Cache-Control: no-store` for `/api/*`, and `Strict-Transport-Security` only when `APP_ENV=production`. |
 | Metric and log | `request_latency_ms{route=<route template or "unmatched">, status_class="2xx".."5xx"}` and a `http_request` event (method, route, status, latency_ms). |
@@ -372,7 +390,7 @@ Every degraded turn above, except the unexpected exception, returns **HTTP 200**
 
 Notes:
 - When `DependencyUnavailable` happens after an AI-disabled or LLM fallback, `fallback_reason` is overwritten with the dependency reason and the offline notice is **not** returned.
-- Worst-case chat latency: the LLM call can take up to `LLM_TIMEOUT_SECONDS` (20 s) per attempt with 1 retry plus backoff, and a tool can add up to 20 s. That can exceed the frontend's 45 s abort (`REQUEST_TIMEOUT_MS`). nginx allows 60 s. When the client times out, the server may still finish the turn and save it.
+- Worst-case chat latency: the LLM call can take up to `LLM_TIMEOUT_SECONDS` (20 s) per attempt with 1 retry plus backoff, and a tool can add up to 20 s. That can exceed the frontend's 45 s abort (`REQUEST_TIMEOUT_MS`); any proxy placed in front of the API by the host needs a read timeout above that. When the client times out, the server may still finish the turn and save it.
 - The legacy `/api/chat` response has no `meta`, so it does not report degradation.
 
 ---
@@ -532,7 +550,7 @@ Legacy codes use `LEGACY_CODES` for `validation_error`, `invalid_booking_details
 |---|---|---|
 | `VALIDATION_ERROR` | 422 | request schema validation, malformed JSON |
 | `INVALID_BOOKING_DETAILS` | 422 | availability business rules on form, stateless and legacy endpoints |
-| `PAYLOAD_TOO_LARGE` | 413 | middleware, `Content-Length` above 64 KB (nginx also rejects at the edge) |
+| `PAYLOAD_TOO_LARGE` | 413 | middleware, `Content-Length` above 64 KB |
 | `METHOD_NOT_ALLOWED` | 405 | wrong HTTP method on an existing route |
 | `NOT_FOUND` | 404 | unknown tenant (admin), `/metrics` when disabled, unmatched routes |
 | `HOTEL_NOT_FOUND` | 404 | unknown or inactive hotel, admin hotel outside tenant, bad hotel path |
@@ -554,12 +572,12 @@ Legacy codes use `LEGACY_CODES` for `validation_error`, `invalid_booking_details
 
 ## 10. Idempotent booking flow (architecture exercise)
 
-`create_booking` (`tools/builtin.py`) exists to exercise the authorization and idempotency path end to end. It is **not exposed to the model** (`exposed_to_model=False`), requires the `booking_tools_enabled` flag (default off), and **no HTTP endpoint invokes it**. Only tests and `scripts/replica_booking_probe.py` call it (`invoked_by="api"`). Modify and cancel raise `NOT_SUPPORTED` in the mock.
+`create_booking` (`tools/builtin.py`) exists to exercise the authorization and idempotency path end to end. It is **not exposed to the model** (`exposed_to_model=False`), requires the `booking_tools_enabled` flag (default off), and **no HTTP endpoint invokes it**. Only tests call it (`invoked_by="api"`). Modify and cancel raise `NOT_SUPPORTED` in the mock.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Caller as Trusted caller (tests, replica probe)
+    participant Caller as Trusted caller (tests)
     participant TR as ToolRegistry
     participant T as CreateBookingTool
     participant R as ResilientReservationProvider
@@ -598,20 +616,20 @@ Semantics:
 - **Failures are not stored**: if the operation raises (for example `NOT_AVAILABLE`, which becomes `BUSINESS_RULE`), a later call with the same key runs it again.
 - **No retries on mutations**: `ResilientReservationProvider` uses `retries=0` for create, modify and cancel. The idempotency key makes a *caller's* retry safe. If the 5 s timeout fires, the operation may still finish in its worker thread and store its result, and a caller retry with the same key then returns that booking.
 - **One durable confirmation**: `BookingConfirmed` uses the deterministic event id `booking-confirmed-{booking_id}`, so idempotent replays on any replica record one audit row.
-- **Evidence**: 9 concurrent duplicate calls across 3 in-process replicas sharing Redis produced 1 booking id, created on exactly 1 replica (`tests/integration/test_redis_state.py`). In the 3-container stack, `scripts/replica_booking_probe.py` fired the same booking simultaneously in each container: the same booking id everywhere, created on exactly one, and PostgreSQL recorded `BookingRequested` 3 times and `BookingConfirmed` once.
+- **Evidence**: 9 concurrent duplicate calls across 3 in-process replicas sharing Redis produced 1 booking id, created on exactly 1 replica (`tests/integration/test_redis_state.py`). This integration test was verified locally once against Redis 7.4; it skips unless `TEST_REDIS_URL` is set and is not run in CI.
 - **Limits**: the mock's booking dict is per process, and a Redis lease that expires before the operation finishes lets a second attempt start. The `bookings` table's unique `(tenant_id, hotel_id, idempotency_key)` constraint exists in the migration as the durable backstop, but no bookings repository is wired (*designed*). See [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md).
 
 ---
 
 ## 11. Concurrency notes
 
-- **Sync endpoints, async liveness**: `/health` is the only `async def` endpoint, so it answers even when the worker thread pool is saturated. Every other endpoint, including `post_message`, both availability endpoints and legacy `chat`, is a plain `def` that FastAPI runs in the AnyIO worker thread pool. Earlier, those endpoints were `async def` wrappers that ran tenant resolution and rate limiting (Redis round trips in multi-replica mode) on the event loop; this was found while verifying the container stack and fixed by making them sync ([DECISIONS.md](DECISIONS.md#sync-endpoints-instead-of-async-wrappers)). A regression test (`test_blocking_state_calls_never_run_on_the_event_loop`) checks that only `/health` is async and that it stays under 300 ms while 4 requests wait on a slow rate limiter.
+- **Sync endpoints, async liveness**: `/health` is the only `async def` endpoint, so it answers even when the worker thread pool is saturated. Every other endpoint, including `post_message`, both availability endpoints and legacy `chat`, is a plain `def` that FastAPI runs in the AnyIO worker thread pool. Earlier, those endpoints were `async def` wrappers that ran tenant resolution and rate limiting (Redis round trips in multi-replica mode) on the event loop; this was found during an earlier (since removed) container verification and fixed by making them sync ([DECISIONS.md](DECISIONS.md#sync-endpoints-instead-of-async-wrappers)). A regression test (`test_blocking_state_calls_never_run_on_the_event_loop`) checks that only `/health` is async and that it stays under 300 ms while 4 requests wait on a slow rate limiter.
 - **Thread pool size**: the AnyIO thread limiter is set to `WORKER_THREADS` (default 150) at startup. Each in-flight AI turn holds one worker thread for the whole LLM call, so this, not CPU, caps concurrent AI turns per process. The measurement behind the default is in [PERFORMANCE.md](PERFORMANCE.md).
 - **Two executors** (`core/resilience.py`): `TOOL_EXECUTOR` (32 workers) runs tool bodies, and `INTEGRATION_EXECUTOR` (32 workers) runs reservation calls. A tool running in `TOOL_EXECUTOR` calls the reservation wrapper, which submits to `INTEGRATION_EXECUTOR`. Using one shared pool could deadlock under load, with every worker blocked waiting on an inner call that can't get a worker.
 - **Timeouts do not kill work**: `call_with_timeout` calls `future.cancel()`, which cannot stop a thread that is already running. A timed-out call keeps its worker until it returns. GLM HTTP timeouts are different: httpx closes the connection (tested with a real slow server).
 - **Context propagation**: `call_with_timeout` runs the function via `contextvars.copy_context().run`, so `request_id`, `trace_id` and tenant fields reach logs written in worker threads. `bind_context` updates the request's context dict in place, so ids bound in a worker thread are also visible to the middleware's access log.
 - **Thread safety**: the in-memory conversation repository, rate limiter, lock store, `TTLCache`, circuit breaker and in-memory idempotency store use `threading.Lock` or `threading.Condition`. The Redis implementations do each multi-step operation in one Lua script or a single `SET NX PX`. `MockReservationProvider`'s inventory and booking dicts and `AIAssistant._system_prompts` are unlocked plain dicts. That is safe enough for idempotent loads under the GIL, but not a design guarantee.
-- **Per-conversation serialisation**: chat turns and booking-form submissions on a conversation take the same lease lock from the `LockStore` (§2.3), per process with `STATE_BACKEND=memory` and across replicas with Redis. The lock is an efficiency guard: a second request waits instead of spending a model call that would be thrown away. Correctness comes from the compare-and-set save: with locks disabled, 6 concurrent turns on 3 replicas saved 1 and rejected 5 with 409, with no lost update. With locks enabled, 6 concurrent turns on 3 in-process replicas stored all 12 messages, and in the 3-container stack 8 concurrent turns stored 16 messages. Conversation deletion does not take the lock.
+- **Per-conversation serialisation**: chat turns and booking-form submissions on a conversation take the same lease lock from the `LockStore` (§2.3), per process with `STATE_BACKEND=memory` and across replicas with Redis. The lock is an efficiency guard: a second request waits instead of spending a model call that would be thrown away. Correctness comes from the compare-and-set save: with locks disabled, 6 concurrent turns on 3 replicas saved 1 and rejected 5 with 409, with no lost update. With locks enabled, 6 concurrent turns on 3 in-process replicas stored all 12 messages (in-process tests with a shared Redis; verified locally once, not run in CI). Conversation deletion does not take the lock.
 - **No message idempotency**: messages carry no idempotency key. A client retry after a timeout, where the server had already finished, stores the exchange twice.
 - **What is shared and what is not**: see §12.
 
@@ -638,4 +656,4 @@ With `STATE_BACKEND=memory` and several replicas or workers, limits are multipli
 - **Retention**: `python -m app.db.retention` (`AUDIT_RETENTION_DAYS`, default 365) deletes old audit events and expired database conversations tenant by tenant, under row-level security with the application role.
 - **Not wired (designed)**: repositories for conversations, messages, tool calls, bookings, knowledge and evaluations. Conversations live in memory or Redis.
 
-Deployment, migrations and the verified multi-replica stack: [DEPLOYMENT.md](DEPLOYMENT.md). Environment variables: [CONFIGURATION.md](CONFIGURATION.md). Data handling and retention: [PRIVACY.md](PRIVACY.md).
+Running locally, optional adapters and migrations: [DEPLOYMENT.md](DEPLOYMENT.md). Environment variables: [CONFIGURATION.md](CONFIGURATION.md). Data handling and retention: [PRIVACY.md](PRIVACY.md).

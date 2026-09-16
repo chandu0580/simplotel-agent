@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
         task = asyncio.create_task(purge_expired_conversations())
         yield
         # Graceful shutdown: uvicorn has already stopped accepting connections and drained in-flight
-        # requests (bounded by --timeout-graceful-shutdown); now flush and close dependencies.
+        # requests (bounded by uvicorn's --timeout-graceful-shutdown when set); now flush and close dependencies.
         task.cancel()
         container.close()
         log_event(logger, "shutdown_complete")

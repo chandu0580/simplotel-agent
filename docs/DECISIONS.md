@@ -98,7 +98,7 @@ Several layers, so no single one has to be perfect:
 | **Availability data unavailable** (in production, a PMS or booking engine outage) | The mock sits behind a resilience wrapper: a 5 s timeout per attempt, read retries bounded by a 16 s deadline, and a circuit breaker. In chat the guest gets "I can't check live availability right now" with contact details (`200`, `meta.degradation` `RESERVATION_UNAVAILABLE`, `TOOL_TIMEOUT` or `TOOL_UNAVAILABLE`); the booking form gets `503 RESERVATION_UNAVAILABLE` with `Retry-After: 30`. Only successful results from the last 15 s are served from cache; an expired entry is never used as a fallback. No real PMS is connected; see [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md). |
 | **Conversation busy** (a second message while the first is still being answered, another tab, a double submit) | `409 CONVERSATION_BUSY` with `Retry-After: 2`. The chat client waits (capped at 3 s) and retries once, then shows "Still answering your previous message". |
 | **Shared state unavailable** (Redis down, multi-replica mode) | Conversation reads and writes return `503 STATE_UNAVAILABLE`; the UI shows its "temporarily unavailable" message. The rate limiter fails open and counts the errors. |
-| **Request too large** | Bodies over 64 KB are rejected with `413 PAYLOAD_TOO_LARGE` at nginx and in the backend. The UI shows a message without a retry button. |
+| **Request too large** | Bodies over 64 KB are rejected with `413 PAYLOAD_TOO_LARGE` by the backend middleware. The UI shows a message without a retry button. |
 
 ## How would you measure whether the feature is actually useful?
 
@@ -142,7 +142,7 @@ These are **proposed** metrics. Nothing here has been measured in production.
    - Moderation. (Masking of card numbers, emails and phone numbers before the model is now implemented; names and addresses are not detected. See [PRIVACY.md](PRIVACY.md).)
    - Multilingual support: Hindi and other regional languages matter for this market.
 4. **Streaming responses** for better perceived latency, and re-tune `effort` per route from measured quality.
-5. **Abuse and cost controls.** Bot protection, token budgets per conversation, and alerts on cost anomalies. (Rate limiting by IP burst, IP, tenant, hotel and conversation, and a 64 KB request size limit at the edge and in the backend, are now implemented.)
+5. **Abuse and cost controls.** Bot protection, token budgets per conversation, and alerts on cost anomalies. (Rate limiting by IP burst, IP, tenant, hotel and conversation, and a 64 KB request size limit in the backend, are now implemented.)
 6. **Human handoff.** Hand a conversation to a human agent with the full transcript and analytics. (Server-side conversations, so the client can't forge history, are now implemented, in memory or shared in Redis.)
 7. **Observability.** OpenTelemetry traces, and dashboards and alerts for the metrics above. (JSON logs with secret redaction and request, tenant and conversation context are implemented.)
 8. **Frontend.**
@@ -177,7 +177,7 @@ These are **proposed** metrics. Nothing here has been measured in production.
 - **Server-side refusal fallback** (`fallbacks: "default"`, Anthropic adapter only): if the model declines a request, the API retries on a fallback model instead of failing the guest's turn. Tested against the request contract only, not the live API.
 - **Tests at several levels:**
   - pytest covers business logic, the API contract, tool handling, grounding checks and every failure path, using a fake Anthropic client, the real Anthropic SDK against a mocked HTTP transport, and GLM adapter tests (including a real slow HTTP server for timeouts). Provider-neutral contract tests hold the Anthropic, GLM and scripted providers to the same failure behaviour.
-  - Integration tests run against real Redis and PostgreSQL containers.
+  - Integration tests for the optional Redis and PostgreSQL adapters run against real services when `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set (verified locally once; not run in CI).
   - Vitest and Testing Library cover the UI states.
   - Playwright covers the real integrated stack on desktop and mobile.
   - A separate eval runner measures model behaviour. It has been run offline and against GLM (development and holdout suites). GLM results are evidence about the GLM runtime only; the eval has not been run against the live Claude API.
@@ -197,7 +197,7 @@ After the assignment, the codebase was evolved into an enterprise architecture f
 - **Versions on every answer.** Prompt, tool-schema and knowledge versions appear in traces, API responses, admin configuration and eval results, so production behaviour can be traced back to what produced it.
 - **Review-driven hardening.** Independent reviews of the enterprise changes found real issues, which were fixed with regression tests:
   - Prompt-tag injection through replayed history.
-  - Security headers silently dropped by nginx.
+  - Security headers silently dropped by the nginx edge configuration of the earlier container setup (since removed).
   - Rate limiting that skipped unknown-hotel probes.
   - Lost messages under concurrent turns.
   - A liveness check that shared the request thread pool.
@@ -241,9 +241,8 @@ The production hardening and evidence phase added shared state, a durable audit 
 - Only the audit sink is wired to PostgreSQL. Repositories for conversations, messages, tool calls, bookings, knowledge and evaluations are designed (schema only), not implemented.
 
 **Evidence.**
-- `tests/integration/test_redis_state.py` (real Redis 7.4 container): compare-and-set and native TTL, a rate limit shared across 3 limiters (5 allowed of 9), fail-open, 503 on outage, locks across clients, idempotency across 3 stores (9 concurrent calls, operation ran once), `IN_PROGRESS`; three in-process replicas: 6 concurrent turns stored 12 messages, 9 concurrent duplicate bookings produced 1 booking id, a shared IP limit allowed 6 of 9, availability results were identical, a cross-tenant read on another replica returned 404, and readiness returned 503 with Redis unreachable.
-- `tests/integration/test_postgres.py` (real PostgreSQL 17 container, non-superuser application role): idempotent migrations and checksum drift detection, row-level security forced on all 11 tables, cross-tenant reads and writes blocked, composite foreign keys blocking cross-tenant references, per-tenant idempotency key uniqueness, tenant-scoped audit events, retention.
-- Container stack (`docker-compose.scale.yml`: nginx, 3 backend replicas, Redis, PostgreSQL, migration job; AI disabled): `scripts/verify_stack.py --expect-shared-state` passed 33/33 checks. Details in [DEPLOYMENT.md](DEPLOYMENT.md).
+- `tests/integration/test_redis_state.py` (real Redis 7.4; verified locally once, not run in CI): compare-and-set and native TTL, a rate limit shared across 3 limiters (5 allowed of 9), fail-open, 503 on outage, locks across clients, idempotency across 3 stores (9 concurrent calls, operation ran once), `IN_PROGRESS`; three in-process replicas: 6 concurrent turns stored 12 messages, 9 concurrent duplicate bookings produced 1 booking id, a shared IP limit allowed 6 of 9, availability results were identical, a cross-tenant read on another replica returned 404, and readiness returned 503 with Redis unreachable.
+- `tests/integration/test_postgres.py` (real PostgreSQL 17, non-superuser application role; verified locally once, not run in CI): idempotent migrations and checksum drift detection, row-level security forced on all 11 tables, cross-tenant reads and writes blocked, composite foreign keys blocking cross-tenant references, per-tenant idempotency key uniqueness, tenant-scoped audit events, retention.
 
 ### Locks for efficiency, compare-and-set for correctness
 
@@ -261,7 +260,7 @@ The production hardening and evidence phase added shared state, a durable audit 
 
 **Evidence.**
 - With locks disabled (compare-and-set alone), 6 concurrent turns on 3 replicas: 1 saved, 5 rejected with 409, no lost update.
-- With locks: 6 concurrent turns on 3 in-process replicas stored 12 messages (`test_concurrent_turns_on_three_replicas_lose_nothing`); in the 3-container stack, 8 concurrent turns stored 16 messages.
+- With locks: 6 concurrent turns on 3 in-process replicas stored 12 messages (`test_concurrent_turns_on_three_replicas_lose_nothing`; shared Redis, verified locally once, not run in CI).
 - `tests/test_state.py`: `test_lock_store_excludes_waits_and_expires_leases`, `test_repository_save_is_compare_and_set`, `test_turn_on_a_locked_conversation_is_409_busy`, `test_version_increments_once_per_saved_turn`, `test_state_configuration_is_validated`. `tests/integration/test_redis_state.py`: `test_conversation_repository_cas_and_native_ttl`, `test_lock_store_across_clients`.
 
 ### Circuit breaker wraps the retry sequence, with a single half-open trial
@@ -283,7 +282,7 @@ The production hardening and evidence phase added shared state, a durable audit 
 
 ### Sync endpoints instead of async wrappers
 
-**Context.** Found while verifying the container stack. The post-message endpoint, both availability endpoints and the legacy chat and availability endpoints were `async def` functions that handed the service call to the thread pool, but ran tenant resolution and rate limiting first, on the event loop. With `STATE_BACKEND=redis` those are Redis round trips, so a slow Redis call blocked every request on that process, including liveness.
+**Context.** Found during an earlier container-based verification (that setup has since been removed; see [Remove Docker/containerization](#remove-dockercontainerization)). The post-message endpoint, both availability endpoints and the legacy chat and availability endpoints were `async def` functions that handed the service call to the thread pool, but ran tenant resolution and rate limiting first, on the event loop. With `STATE_BACKEND=redis` those are Redis round trips, so a slow Redis call blocked every request on that process, including liveness.
 
 **Decision.** Convert those endpoints to plain `def` endpoints, which FastAPI runs entirely in the worker thread pool. `/health` is the only `async` endpoint.
 
@@ -308,16 +307,15 @@ The production hardening and evidence phase added shared state, a durable audit 
 
 ### IP burst limit relaxed to 30 per 10 s
 
-**Context.** An `ip_burst` limit was added in front of the per-minute IP limit, with a first default of 15 requests per 5 s. In the 3-replica container stack it was enforced once across replicas (exactly 15 of 30 requests allowed). Then Playwright's desktop and mobile runs, in parallel from one IP, hit it. Guests sharing a hotel's Wi-Fi share one public IP in the same way.
+**Context.** An `ip_burst` limit was added in front of the per-minute IP limit, with a first default of 15 requests per 5 s. It worked as intended, but then Playwright's desktop and mobile runs, in parallel from one IP, hit it. Guests sharing a hotel's Wi-Fi share one public IP in the same way.
 
 **Decision.** Relax the default to 30 requests per 10 s (`RATE_LIMIT_IP_BURST`, `RATE_LIMIT_BURST_WINDOW_SECONDS`). The other dimensions are unchanged: `ip` 60/min (checked before hotel resolution, so unknown-hotel probes count), `tenant` 3000/min, `hotel` 1200/min, `conversation` 20/min.
 
 **Consequences.**
 - Short bursts from one IP are allowed to be twice as large. The per-minute IP, tenant, hotel and conversation limits still apply.
 - Guests behind one IP still share the IP budgets.
-- The recorded container result (15 of 30) used the old default; the CI verification uses the new defaults.
 
-**Evidence.** `tests/test_state.py::test_ip_burst_limit_rejects_rapid_fire`, `tests/test_state.py::test_tenant_rate_limit_applies_across_endpoints`, `scripts/verify_stack.py`, defaults in `app/core/config.py`.
+**Evidence.** `tests/test_state.py::test_ip_burst_limit_rejects_rapid_fire`, `tests/test_state.py::test_tenant_rate_limit_applies_across_endpoints`, defaults in `app/core/config.py`.
 
 ### PII masking before the model
 
@@ -351,4 +349,18 @@ The production hardening and evidence phase added shared state, a durable audit 
 
 **Evidence.**
 - `tests/integration/test_postgres.py`: `test_audit_sink_writes_tenant_scoped_events`, `test_app_with_database_url_records_audit_events_and_reports_readiness`, `test_retention_purges_old_audit_events_and_expired_conversations_per_tenant`.
-- In the 3-container stack, the simultaneous booking probe (`scripts/replica_booking_probe.py`) recorded `BookingRequested` 3 times and `BookingConfirmed` once.
+
+### Remove Docker/containerization
+
+**Context.** The project had Dockerfiles, compose stacks (single instance and three replicas with Redis and PostgreSQL), an nginx edge and container-only verification scripts and CI jobs. Containerization is not a core requirement of the AI product engineering scope; it was a "good to have" that added setup weight and maintenance without changing the application architecture.
+
+**Decision.** Remove the Dockerfiles, `.dockerignore` files, compose files, the nginx configuration and security-header snippets, the PostgreSQL init script, the container-only scripts (`scripts/verify_stack.py`, `scripts/replica_booking_probe.py`, the image mode of `scripts/scan_secrets.py`), and the `docker` and `integration` CI jobs. The canonical way to run the project is a Python virtual environment with `uvicorn` for the backend and `npm run dev` for the frontend. Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally.
+
+**Consequences.**
+- Simpler local setup: Python and Node.js only.
+- `Content-Security-Policy` and `Permissions-Policy` for the SPA were set only by nginx (HSTS only through a TLS snippet); these headers, including HSTS at TLS termination, are now a hosting requirement for whatever serves the built SPA, not implemented in this repo. The backend middleware still sets its own security headers (HSTS in production).
+- Multi-replica behaviour remains covered by in-process tests with a shared Redis when one is available (`tests/integration/test_redis_state.py`), not by container tests.
+- The optional Redis and PostgreSQL adapters stay in the code behind their interfaces, but their integration tests no longer run in CI; they skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set. Results from container runs are no longer claimed as current evidence.
+- CI has four jobs: backend, security, frontend, e2e.
+
+**Evidence.** `.github/workflows/ci.yml`; `backend/tests/integration/` skip conditions.

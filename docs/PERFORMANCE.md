@@ -11,7 +11,7 @@ LOAD_TEST_WORKER_THREADS=150 python -m perf.load_test --levels 50,100 --scenario
 python -m perf.benchmark                                   # in-process profile of each layer → perf/results.md
 ```
 
-`perf/load_test.py` starts the real API as a subprocess using the container's command (`uvicorn app.main:app`, one worker). It then drives the API over real HTTP with closed-loop virtual users: each user sends its next request as soon as the previous one returns.
+`perf/load_test.py` starts the real API as a subprocess with the standard command (`uvicorn app.main:app`, one worker). It then drives the API over real HTTP with closed-loop virtual users: each user sends its next request as soon as the previous one returns.
 
 | Setting | Value |
 |---|---|
@@ -68,7 +68,7 @@ The thread pool size is now configurable (`WORKER_THREADS`). Re-measured with 15
 
 With 150 threads, 100-user AI throughput doubled and median latency returned to the model's own latency, for about 8 MB more memory. The p95 at 100 users is still 5.3 s, so part of the tail remains. Its cause wasn't isolated; candidates are the single event loop, the client sharing the machine, and GIL contention on the non-model part of each turn. The default is now `WORKER_THREADS=150`. A real model with its own latency and rate limits will behave differently, and the right value per replica should be set from production measurements.
 
-**2. CPU-bound paths saturate one core at about 25 users.** Offline turns and availability searches use about 100% of one core by 10–25 users. After that, throughput falls and tail latency grows (offline p95 3.5 s at 100 users). This is expected for one Python worker. The remedies are more workers per container or more replicas; the Redis state backend (see [DEPLOYMENT.md](DEPLOYMENT.md)) exists so replicas share conversations, limits and idempotency. Adding workers was **not** measured here.
+**2. CPU-bound paths saturate one core at about 25 users.** Offline turns and availability searches use about 100% of one core by 10–25 users. After that, throughput falls and tail latency grows (offline p95 3.5 s at 100 users). This is expected for one Python worker. The remedies are more uvicorn worker processes or more backend processes; the optional Redis state backend (see [DEPLOYMENT.md](DEPLOYMENT.md)) exists so replicas share conversations, limits and idempotency. Adding workers was **not** measured here.
 
 **3. Memory is flat.** Server RSS stayed between 90 and 113 MB in every run.
 
@@ -95,7 +95,7 @@ For comparison, measured live-model latency (GLM 5.2, the development suite thro
 
 ## Not measured
 
-- Multiple uvicorn workers, or multiple replicas under load (replicas were verified functionally, not for throughput)
+- Multiple uvicorn workers, or multiple replicas under load (multi-instance behaviour was verified functionally with in-process tests sharing a Redis, not for throughput)
 - The Redis state backend under load (every run used in-memory state)
 - A real model under concurrent load (no paid traffic was generated)
 - Network latency between client, edge, API, Redis and PostgreSQL

@@ -47,12 +47,12 @@ All code paths are relative to `backend/app/` unless stated otherwise. `containe
 | `ReservationProvider` boundary | **DESIGNED** (no real PMS/CRS adapter) | `reservations/provider.py` |
 | Mock reservation provider and bookings | **IMPLEMENTED + TESTED** (prototype: mock inventory, in-process bookings) | `reservations/provider.py`, `data/hotels/*/inventory.json` |
 | Resilience wrapper (timeout, retries with deadline, circuit breaker, cache) | **IMPLEMENTED + TESTED** (breaker state is per process) | `reservations/provider.py`, `core/resilience.py` |
-| Idempotency store | **IMPLEMENTED + TESTED** (memory, or Redis lease lock plus stored result; tested across 3 stores on real Redis) | `reservations/idempotency.py`, `state/redis_backend.py` |
-| Server-side conversations (TTL, cap, delete, purge, version compare-and-set, turn locks) | **IMPLEMENTED + TESTED** (memory or Redis; Redis tested with three app replicas) | `conversations/`, `core/locks.py`, `state/redis_backend.py` |
+| Idempotency store | **IMPLEMENTED + TESTED** (memory by default, or optional Redis lease lock plus stored result; tested across 3 stores on real Redis, verified locally once, not run in CI) | `reservations/idempotency.py`, `state/redis_backend.py` |
+| Server-side conversations (TTL, cap, delete, purge, version compare-and-set, turn locks) | **IMPLEMENTED + TESTED** (memory by default or optional Redis; Redis tested with three in-process app replicas, verified locally once, not run in CI) | `conversations/`, `core/locks.py`, `state/redis_backend.py` |
 | Rate limiting (IP burst, IP, tenant, hotel, conversation) | **IMPLEMENTED + TESTED** (memory or Redis sliding window) | `core/rate_limit.py`, `api/deps.py`, `state/redis_backend.py` |
 | Knowledge and availability cache | **IMPLEMENTED + TESTED** (per process by design; not shared across replicas) | `core/cache.py` |
-| PostgreSQL schema (11 tables, composite tenant keys, RLS forced), migration runner, retention job | **IMPLEMENTED + TESTED** (real PostgreSQL 17 with a non-superuser app role) | `backend/migrations/0001_domain_model.sql`, `db/migrate.py`, `db/retention.py` |
-| PostgreSQL audit sink | **IMPLEMENTED + TESTED** | `db/audit.py` |
+| PostgreSQL schema (11 tables, composite tenant keys, RLS forced), migration runner, retention job | **IMPLEMENTED + TESTED** (optional adapter; real PostgreSQL 17 with a non-superuser app role, verified locally once, not run in CI) | `backend/migrations/0001_domain_model.sql`, `db/migrate.py`, `db/retention.py` |
+| PostgreSQL audit sink | **IMPLEMENTED + TESTED** (optional adapter; integration test verified locally once, not run in CI) | `db/audit.py` |
 | PostgreSQL repositories for conversations, messages, tool calls, bookings, knowledge, evaluations | **DESIGNED** (schema only; not wired) | `backend/migrations/0001_domain_model.sql` |
 | Object storage | **NOT IMPLEMENTED** | none |
 | Auth boundary for admin API, RBAC model | **IMPLEMENTED + TESTED** | `auth/`, `api/deps.py` |
@@ -68,7 +68,8 @@ All code paths are relative to `backend/app/` unless stated otherwise. `containe
 | Prometheus metrics | **IMPLEMENTED + TESTED** | `core/metrics.py`, `api/ops.py` |
 | Domain events (log, in-memory and PostgreSQL audit publishers) | **IMPLEMENTED + TESTED** | `core/events.py`, `db/audit.py` |
 | Outbox / message broker for events | **DESIGNED** (`EventPublisher` interface) | `core/events.py` |
-| Containers and compose stacks (single instance; 3 replicas + Redis + PostgreSQL) | **IMPLEMENTED + TESTED** (run locally and checked with `scripts/verify_stack.py`) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`, `docker-compose.scale.yml` |
+| Docker/containerization | **NOT REQUIRED FOR CURRENT PROJECT — removed intentionally** (an earlier container setup was removed as out of scope) | none |
+| Security headers for the served SPA (CSP, Permissions-Policy, HSTS at TLS) | **NOT IMPLEMENTED** (hosting requirement for whatever serves the built SPA) | none |
 | CI workflow | **IMPLEMENTED + NOT VERIFIED** (never run on GitHub) | `.github/workflows/ci.yml` |
 | Manual live-AI eval workflow (GLM or Anthropic) | **IMPLEMENTED + NOT VERIFIED** (never run on GitHub) | `.github/workflows/live-ai-eval.yml` |
 
@@ -77,6 +78,24 @@ Latest test totals: [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).
 ---
 
 ## 2. Target enterprise architecture (conceptual)
+
+Product topology today:
+
+```mermaid
+flowchart LR
+    G["Guest"] --> W["React web app"]
+    W -->|"/api/v1"| API["FastAPI API"]
+    API --> TC["Tenant context"]
+    TC --> CONV["Conversation service"]
+    CONV --> ORCH["AI orchestrator"]
+    ORCH --> KN["Knowledge"]
+    ORCH --> TO["Tools"]
+    ORCH --> GU["Guardrails"]
+    ORCH --> LP["LLM provider"]
+    TO --> RES["Reservation / hotel systems"]
+```
+
+State stores are implementation details behind interfaces: in-memory by default, with optional Redis and PostgreSQL adapters. The detailed view below adds future components.
 
 Solid boxes exist in this repository today. Dashed boxes are future components. A solid box can still be a prototype implementation (see section 1).
 
@@ -93,11 +112,10 @@ flowchart TB
     end
 
     subgraph Edge["API gateway layer"]
-        NGINX["nginx: static SPA, /api proxy, security headers, body limit"]:::today
         MW["FastAPI middleware: request/trace ids, security headers, access logs"]:::today
         RL["Rate limits: IP burst and IP before tenant resolution, then tenant, hotel, conversation (memory or Redis)"]:::today
         TR["Tenant resolution: hotel_id to TenantContext"]:::today
-        GW["Managed gateway: OIDC/JWT, WAF"]:::future
+        GW["Managed gateway / SPA hosting: OIDC/JWT, WAF, CSP, Permissions-Policy, HSTS"]:::future
     end
 
     subgraph Assistant["AI guest assistant"]
@@ -132,17 +150,17 @@ flowchart TB
     end
 
     subgraph State["State and data"]
-        REDIS["Redis: conversations, rate limits, idempotency, locks (or in-memory)"]:::today
-        PG["PostgreSQL: audit events (schema for other tables only)"]:::today
+        REDIS["State interfaces: in-memory (default) or optional Redis adapter: conversations, rate limits, idempotency, locks"]:::today
+        PG["Optional PostgreSQL adapter: audit events (schema for other tables only)"]:::today
         PGREPO["PostgreSQL repositories: conversations, bookings, knowledge"]:::future
     end
 
-    WEB --> NGINX
+    WEB --> MW
     WA -.-> GW
     VOICE -.-> GW
     PARTNER -.-> GW
     GW -.-> MW
-    NGINX --> MW --> RL --> TR --> CONV
+    MW --> RL --> TR --> CONV
     CONV --> CTX --> ORCH
     ORCH --> GR
     ORCH --> OFF
@@ -367,7 +385,7 @@ Guest chat itself is unauthenticated by design, so no guest `Principal` exists i
 
 **Idempotency** (**IMPLEMENTED + TESTED**): scope `booking:{tenant}:{hotel}`, key of at least 8 characters, request fingerprint hash. The same key and request return the original booking; the same key with a different request → `IDEMPOTENCY_CONFLICT`. Records expire after 24 h. Two implementations:
 - `InMemoryIdempotencyStore` (`reservations/idempotency.py`): a per-key lock makes concurrent duplicates in one process wait for the first attempt.
-- `RedisIdempotencyStore` (`state/redis_backend.py`): a lease lock (`SET NX PX`) plus a stored result with the request fingerprint; waiters poll and get `IN_PROGRESS` after the wait budget; a Redis error becomes `ReservationError(UNAVAILABLE)`. Tested with 9 concurrent calls across 3 stores (the operation ran once), and in the 3-replica compose stack, where a duplicate booking fired simultaneously in the three containers produced one booking id, created on exactly one replica, and one `BookingConfirmed` audit row.
+- `RedisIdempotencyStore` (`state/redis_backend.py`): a lease lock (`SET NX PX`) plus a stored result with the request fingerprint; waiters poll and get `IN_PROGRESS` after the wait budget; a Redis error becomes `ReservationError(UNAVAILABLE)`. Tested with 9 concurrent calls across 3 stores (the operation ran once), and with three in-process replicas sharing Redis, where 9 concurrent duplicate bookings produced one booking id (verified locally once; not run in CI).
 
 **Production idempotency design** (**DESIGNED**; the schema has a unique `(tenant_id, hotel_id, idempotency_key)` constraint on `bookings`, but no booking repository is wired): an `idempotency_records` table with a unique constraint on `(tenant_id, hotel_id, scope, key)`, inserted in the **same transaction** as the booking row (or the outbox row that drives the external PMS call), storing the fingerprint and the response. Concurrent duplicates fail the unique constraint and read the stored result. For an external PMS, pass the key through where the vendor supports it and reconcile with the PMS confirmation number.
 
@@ -423,9 +441,9 @@ The full threat model is in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 **RBAC** (**IMPLEMENTED + TESTED** model): `platform_admin ⊃ tenant_admin ⊃ hotel_admin ⊃ hotel_staff`; `guest` is separate. Principals are scoped to one tenant (or `*` for platform admins only) and optionally a hotel subset. Knowledge listing requires `hotel_staff`; `ai-config` requires `hotel_admin`.
 
-**Secrets.** Environment variables only (optional local `.env`, never committed, not copied into images; compose reads `backend/.env` at runtime; the scale compose file requires database passwords from the environment). `scripts/scan_secrets.py` found no credentials in tracked files, the frontend bundle or the backend image filesystem. `Settings` hides keys from `repr`. `Redactor` removes configured secret values and common key/token patterns from log messages, arguments and structured fields, and the output guardrails block replies that contain them. The frontend bundle contains no secrets; the browser calls the backend only.
+**Secrets.** Environment variables only (optional local `.env`, never committed, read at runtime). `scripts/scan_secrets.py` found no credentials in tracked files or the frontend bundle. `Settings` hides keys from `repr`. `Redactor` removes configured secret values and common key/token patterns from log messages, arguments and structured fields, and the output guardrails block replies that contain them. The frontend bundle contains no secrets; the browser calls the backend only.
 
-**HTTP hardening** (**IMPLEMENTED + TESTED**): `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Cache-Control: no-store` on `/api/`, HSTS when `APP_ENV=production` (backend); in nginx, the same headers plus a strict CSP and a `Permissions-Policy` (camera, microphone, geolocation, payment, usb, interest-cohort denied) come from one snippet (`frontend/security-headers.conf`) included in every `location` (nginx discards inherited `add_header` directives in blocks that set their own), with the backend's duplicate headers hidden on `/api/`; HSTS is not sent over plain HTTP (`frontend/security-headers-tls.conf` is for the TLS edge); request bodies over 64 KB are rejected by nginx (`client_max_body_size 64k`) and by the backend middleware (`413 PAYLOAD_TOO_LARGE`); `scripts/verify_stack.py` checks these headers and limits against a running stack; IP rate limiting on admin endpoints as well as guest endpoints; CORS allow-list with `GET/POST/DELETE` only; validated `X-Request-ID` and `traceparent`; `X-Forwarded-For` trusted only when `TRUST_PROXY_HEADERS=true` (nginx overwrites it); OpenAPI docs off by default in production.
+**HTTP hardening** (**IMPLEMENTED + TESTED** in the backend): `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Cache-Control: no-store` on `/api/`, HSTS when `APP_ENV=production`, all set by the backend middleware; request bodies over 64 KB are rejected by the backend middleware (`413 PAYLOAD_TOO_LARGE`); IP rate limiting on admin endpoints as well as guest endpoints; CORS allow-list with `GET/POST/DELETE` only; validated `X-Request-ID` and `traceparent`; `X-Forwarded-For` trusted only when `TRUST_PROXY_HEADERS=true` (the proxy in front must overwrite it); OpenAPI docs off by default in production. **Hosting requirement (NOT IMPLEMENTED in this repo):** whatever serves the built SPA in a real deployment must set `Content-Security-Policy`, `Permissions-Policy` and, at TLS termination, HSTS, and must not expose `/metrics` publicly. (These were previously set by an nginx edge in a container setup that has been removed intentionally.)
 
 **Production config validation** (`Settings.validate`): rejects static-token auth, `*`/localhost CORS origins, non-JSON logs, disabled rate limiting, `LLM_PROVIDER=mock` and non-`https://` `LLM_BASE_URL`/`ANTHROPIC_BASE_URL` when `APP_ENV=production`; rejects unknown environments, providers, effort levels and feature flags in every environment.
 
@@ -441,14 +459,14 @@ Details and metric catalogue: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 - **Structured logs** (**IMPLEMENTED + TESTED**): JSON in production; every record carries `request_id`, `trace_id`, `tenant_id`, `hotel_id`, `conversation_id` and `channel` from a context variable that is propagated into worker threads (ids bound inside a worker thread also appear on the middleware's `http_request` access log); `log_event` for machine-readable events; a redaction filter on the handler.
 - **AI traces** (**IMPLEMENTED + TESTED**): one `AITrace` per turn with provider, model, prompt/tool/knowledge versions, evidence and cited ids, tool calls, guardrails and input flags, stop reason, token usage (including cache reads and cache writes), latency split into LLM, tool, knowledge, retrieval and app latency (app = total − LLM − tools), PII masked, mode and fallback reason. Sinks: structured log and a 500-entry in-memory ring; an exporter is a new `TraceSink`. A failing sink never breaks a reply.
-- **Prometheus metrics** (**IMPLEMENTED + TESTED**): turns, success/failure, fallbacks by reason, reply types, tool calls/failures/latency, guardrail interventions, prompt-injection signals by input flag (`prompt_injection_signals_total{flag}`, counted whether or not the turn was blocked), rate-limit rejections, LLM tokens by kind (`input`, `output`, `cache_read`, `cache_write`) and model (`llm_tokens_total{kind, model}`, so cost can be priced per model), LLM latency by provider, HTTP latency by route template and status class, turn and app latency by mode, retrieval latency, `pii_masked_total{kind}`, `state_backend_errors_total{component}`, `conversation_conflicts_total`, `audit_events_total{outcome}`. Tests assert that key counters move. Labels are low-cardinality by design: no tenant, hotel or conversation labels. Per-tenant analysis comes from logs, traces and events. `/metrics` is not reachable through the nginx edge (checked by `scripts/verify_stack.py`).
+- **Prometheus metrics** (**IMPLEMENTED + TESTED**): turns, success/failure, fallbacks by reason, reply types, tool calls/failures/latency, guardrail interventions, prompt-injection signals by input flag (`prompt_injection_signals_total{flag}`, counted whether or not the turn was blocked), rate-limit rejections, LLM tokens by kind (`input`, `output`, `cache_read`, `cache_write`) and model (`llm_tokens_total{kind, model}`, so cost can be priced per model), LLM latency by provider, HTTP latency by route template and status class, turn and app latency by mode, retrieval latency, `pii_masked_total{kind}`, `state_backend_errors_total{component}`, `conversation_conflicts_total`, `audit_events_total{outcome}`. Tests assert that key counters move. Labels are low-cardinality by design: no tenant, hotel or conversation labels. Per-tenant analysis comes from logs, traces and events. `/metrics` is intended for internal scraping only; keeping it off the public edge is a hosting requirement.
 - **Domain events** (**IMPLEMENTED + TESTED** publishers; log, in-memory and PostgreSQL audit sink): `ConversationStarted/Deleted`, `GuestQuestionAsked`, `AssistantResponseGenerated`, `AvailabilityChecked`, `FallbackTriggered`, `GuardrailTriggered`, `ToolFailed`, `BookingRequested/Confirmed`. Each carries tenant context and no message text. The PostgreSQL audit sink uses a bounded queue (10k) and a background writer that batch-inserts per tenant under RLS; dropped events are counted, and the queue is flushed on shutdown. `BookingConfirmed` has a deterministic event id so idempotent replays record one row.
 
 ---
 
 ## 14. Data model and database readiness
 
-The PostgreSQL schema in `backend/migrations/0001_domain_model.sql` (applied by `python -m app.db.migrate`: ordered, one transaction per migration, SHA-256 checksums in `schema_migrations`, advisory lock against concurrent migrators) defines `tenants`, `hotels`, `rooms`, `knowledge_documents`, `knowledge_versions`, `conversations`, `messages`, `tool_calls`, `bookings`, `audit_events` and `evaluations`. Every table has `tenant_id`, composite keys and foreign keys include it, check constraints cover dates, counts and statuses, and RLS is enabled and forced on all 11 tables. **IMPLEMENTED + TESTED** as schema against real PostgreSQL 17.
+The PostgreSQL schema in `backend/migrations/0001_domain_model.sql` (applied by `python -m app.db.migrate`: ordered, one transaction per migration, SHA-256 checksums in `schema_migrations`, advisory lock against concurrent migrators) defines `tenants`, `hotels`, `rooms`, `knowledge_documents`, `knowledge_versions`, `conversations`, `messages`, `tool_calls`, `bookings`, `audit_events` and `evaluations`. Every table has `tenant_id`, composite keys and foreign keys include it, check constraints cover dates, counts and statuses, and RLS is enabled and forced on all 11 tables. **IMPLEMENTED + TESTED** as schema against real PostgreSQL 17 (verified locally once; not run in CI).
 
 What reads and writes each entity today:
 
@@ -497,7 +515,7 @@ Local HTTP load test (`python -m perf.load_test`; Windows 11, 4 cores / 8 thread
 
 | Stage | What changes (all proposed) |
 |---|---|
-| **1 hotel** (today, default settings) | Single process; in-memory conversations, rate limits, cache and idempotency; JSON configuration. Acceptable only for a demo or pilot with restart tolerance. `docker-compose.scale.yml` already rehearses the next stage locally: 3 replicas sharing Redis state, PostgreSQL audit. |
+| **1 hotel** (today, default settings) | Single process; in-memory conversations, rate limits, cache and idempotency; JSON configuration. Acceptable only for a demo or pilot with restart tolerance. The optional Redis state adapter and PostgreSQL audit sink already exist for the next stage and are covered by in-process multi-replica integration tests (verified locally once; not run in CI). |
 | **~100 hotels** | Postgres repositories for tenants, hotels and knowledge (admin writes; audit exists); Redis for conversations, rate limits, idempotency and locks (exists) so that 2+ API replicas behind a load balancer are possible; OIDC for the admin API; real secret manager; OpenTelemetry exporter; first real PMS adapter; per-tenant LLM usage from traces. |
 | **~1,000 hotels** | Connection pooling (for example, PgBouncer); async LLM client or a larger worker pool (a synchronous model call currently occupies a worker thread per turn); outbound integrations through queues with per-vendor concurrency limits; transactional outbox for events; knowledge snapshot cache invalidated on publish instead of TTL; provider rate limits and quotas managed with per-tenant budgets and priority; prompt caching effectiveness measured; gateway-level rate limiting and WAF. |
 | **~10,000+ hotels** | Partition conversation, message and audit tables by time (and index by tenant); consider dedicated databases for the largest tenants; semantic retrieval with per-tenant index sharding if content grows; multiple LLM provider accounts or providers with routing and failover; regional deployments for data residency and latency; extraction of the reservation-integration and channel services if their triggers (section 3) are met; per-tenant cost dashboards and hard budget enforcement. |
@@ -508,11 +526,12 @@ Local HTTP load test (`python -m perf.load_test`; Windows 11, 4 cores / 8 thread
 
 Operational detail, SLO proposals and runbooks: [SRE.md](SRE.md).
 
-- **Containers** (**IMPLEMENTED + TESTED**): multi-stage builds with base images pinned by digest; backend runs as UID 10001, frontend nginx as UID 101; image `HEALTHCHECK`s; migrations shipped in the image; compose runs both with `read_only: true`, `tmpfs /tmp`, `no-new-privileges` and `cap_drop: ALL`. No secrets are baked into images. `--timeout-graceful-shutdown 25`: on SIGTERM a replica exited 0 in about 2.1 s after logging `shutdown_complete`, while the edge kept serving through the other replicas.
-- **Multi-replica stack** (`docker-compose.scale.yml`, run locally): nginx, 3 backend replicas, Redis, PostgreSQL and a migrate job; Redis and PostgreSQL publish no host ports; passwords are required from the environment; the app role is created `NOSUPERUSER NOBYPASSRLS` with DML only. `scripts/verify_stack.py --expect-shared-state` passed 33/33 checks with AI disabled, including the IP burst limit enforced once across replicas. Details: [DEPLOYMENT.md](DEPLOYMENT.md).
+- **Running locally**: backend in a Python virtual environment with `uvicorn app.main:app --reload --port 8000`; frontend with `npm run dev` (Vite proxies `/api`). **Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally.**
+- **Graceful shutdown** (**IMPLEMENTED**): in the application lifespan, after uvicorn stops accepting connections and drains in-flight requests (bounded by `--timeout-graceful-shutdown` when set), the purge task is cancelled, the audit sink is flushed and closed, LLM and Redis clients are closed, and `shutdown_complete` is logged.
+- **Optional adapters**: Redis (`STATE_BACKEND=redis`) and PostgreSQL (`DATABASE_URL`; the application role should be `NOSUPERUSER NOBYPASSRLS` with DML only so RLS applies). Integration tests in `backend/tests/integration` skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` point at running services; they were verified locally once against Redis 7.4 and PostgreSQL 17 and are not run in CI. Details: [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Health vs readiness** (**IMPLEMENTED + TESTED**): `/health` is liveness only and is the only async handler, served on the event loop, so a saturated worker thread pool can't fail liveness (tested: it stays under 300 ms while requests wait on a slow rate limiter). `/ready` returns 503 when knowledge can't be loaded or the conversation state store (Redis) is unreachable; the audit store is reported but not required; an open reservation circuit reports `reservations: degraded` with 200, and the LLM is reported as `configured`/`not_configured` without failing (offline mode exists).
 - **Graceful degradation** (**IMPLEMENTED + TESTED**): LLM failure → offline engine with `meta.degradation`; reservation outage → safe reply / 503 with `Retry-After`; Redis outage → 503 `STATE_UNAVAILABLE` for conversations, while the rate limiter fails open with a log line and `state_backend_errors_total{component="rate_limiter"}`; broken trace or event sinks are isolated.
-- **CI** (`.github/workflows/ci.yml`, **IMPLEMENTED + NOT VERIFIED**, never run on GitHub): backend (ruff, pytest, offline eval regression gate, `pip-audit`); integration (Redis and PostgreSQL service containers, `tests/integration`); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, `npm audit`); Playwright E2E with AI disabled; docker (build, non-root and image secret scan, single-instance `verify_stack`, 3-replica `verify_stack --expect-shared-state`, simultaneous booking probe across replicas, graceful stop). No CI job requires an LLM secret.
+- **CI** (`.github/workflows/ci.yml`, **IMPLEMENTED + NOT VERIFIED**, never run on GitHub): four jobs: backend (ruff, pytest, offline eval regression gate, `pip-audit`); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, `npm audit`); e2e (Playwright with AI disabled). The optional-adapter integration tests skip in CI. No CI job requires an LLM secret or Docker.
 - **Live AI eval** (`.github/workflows/live-ai-eval.yml`, **IMPLEMENTED + NOT VERIFIED**): manual `workflow_dispatch`, provider `glm` or `anthropic`, secrets from the protected `ai-evaluation` environment, inputs sanitised, optional baseline gate, results as artifacts. It has **not** been run on GitHub.
 - **Environments**: `APP_ENV=development|test|production`; `Settings.for_tests()` disables AI and rate limits; production validation fails startup on insecure configuration (section 12).
 
@@ -543,7 +562,7 @@ Note: `LLM_MAX_TOKENS` defaults to 16,000, which bounds truncation risk rather t
 | 3. Real reservation integration | A signed pilot hotel with a PMS/CRS that exposes an API; sandbox credentials | One `ReservationProvider` adapter; persistent idempotency; vendor-specific timeouts and breaker tuning; reconciliation; contract tests against the vendor sandbox | Vendor latency and rate limits; inventory freshness vs cache TTL; booking mutations with payment and cancellation rules; liability for wrong bookings |
 | 4. Semantic retrieval | Content size or eval results show full context is insufficient | Hybrid retriever, ingestion and embedding pipeline, retrieval recall evals, per-tenant flag rollout | Missed evidence reducing groundedness; embedding cost; index consistency with published versions |
 | 5. Multi-channel | Customer demand and a chosen BSP/CPaaS; channel-specific legal review | Inbound WhatsApp webhooks with signature verification and template handling; voice with streaming STT/TTS; channel identity mapping | Latency budgets (voice); messaging policy compliance; duplicate or out-of-order webhook delivery |
-| 6. Horizontal scaling (shared state for replicas exists and was verified locally with 3 replicas) | Measured load approaching single-replica limits; steps 2 and 3 done | Autoscaling, gateway rate limits, async LLM client, queues for integrations, load tests with real providers in a production-like environment | Hidden in-process state; provider quota exhaustion; cost growth |
+| 6. Horizontal scaling (optional shared-state adapter for replicas exists; verified locally once with 3 in-process replicas, not run in CI) | Measured load approaching single-replica limits; steps 2 and 3 done | Autoscaling, gateway rate limits, async LLM client, queues for integrations, load tests with real providers in a production-like environment | Hidden in-process state; provider quota exhaustion; cost growth |
 | 7. Service extraction (only where justified) | A trigger from section 3 is met and measured | Extract one boundary at a time behind its existing interface; contract tests; distributed tracing | Network failure modes; data ownership disputes; operational overhead exceeding the benefit |
 
 ---
