@@ -14,6 +14,7 @@ the model, so it can't misquote prices or inventory.
 
 import json
 import logging
+import time
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -86,7 +87,9 @@ class AIAssistant:
 
     def reply(self, turn: Turn, trace: AITrace) -> ChatReply:
         kb = turn.kb
+        retrieval_started = time.perf_counter()
         evidence = self.retriever.retrieve(kb, turn.message)
+        trace.retrieval_latency_ms = round((time.perf_counter() - retrieval_started) * 1000, 3)
         trace.evidence_ids = evidence.ids
 
         key = (kb.hotel.id, kb.knowledge_version, content_hash(evidence.ids))
@@ -107,6 +110,7 @@ class AIAssistant:
                     max_tokens=route.max_tokens,
                     effort=route.effort,
                     tools=specs,
+                    require_tool=True,
                 )
             )
         except LLMProviderError as exc:
@@ -165,8 +169,8 @@ class AIAssistant:
         trace.tool_calls.append(result.record("model"))
 
         if not result.ok:
-            if result.error_code in (ToolErrorCode.DEPENDENCY_UNAVAILABLE, ToolErrorCode.TIMEOUT):
-                raise DependencyUnavailable(availability_unavailable_reply(turn), "availability_unavailable")
+            if reason := dependency_reason(result.error_code):
+                raise DependencyUnavailable(availability_unavailable_reply(turn), reason)
             # Unknown, unexposed, unauthorized or malformed tool calls are model errors.
             raise LLMError("invalid_tool_call", f"Model tool call {name!r} rejected: {result.error_code}")
 
@@ -183,6 +187,15 @@ class AIAssistant:
             suggestions = AVAILABLE_SUGGESTIONS if result.data.available else UNAVAILABLE_SUGGESTIONS
             return ChatReply(type="availability", text=result.data.message, availability=result.data, suggestions=suggestions)
         raise LLMError("invalid_tool_call", f"Tool {name!r} returned an unexpected result")
+
+
+def dependency_reason(code: ToolErrorCode | None) -> str | None:
+    """Tool failures that are the dependency's fault (not the model's) → degradation reason."""
+    return {
+        ToolErrorCode.DEPENDENCY_UNAVAILABLE: "reservation_unavailable",
+        ToolErrorCode.TIMEOUT: "tool_timeout",
+        ToolErrorCode.EXECUTION_FAILED: "tool_unavailable",
+    }.get(code)
 
 
 def availability_unavailable_reply(turn: Turn) -> ChatReply:

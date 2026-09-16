@@ -39,7 +39,9 @@ def _hit(request: Request, rule: RateLimitRule) -> None:
 def enforce_ip_limit(request: Request) -> None:
     s = container_of(request).settings
     if s.rate_limit_enabled:
-        _hit(request, RateLimitRule("ip", client_ip(request, s.trust_proxy_headers), s.rate_limit_ip_per_minute))
+        ip = client_ip(request, s.trust_proxy_headers)
+        _hit(request, RateLimitRule("ip_burst", ip, s.rate_limit_ip_burst, s.rate_limit_burst_window_seconds))
+        _hit(request, RateLimitRule("ip", ip, s.rate_limit_ip_per_minute))
 
 
 def resolve_guest_context(request: Request, hotel_id: str, channel: Channel = Channel.WEB) -> TenantContext:
@@ -52,11 +54,15 @@ def resolve_guest_context(request: Request, hotel_id: str, channel: Channel = Ch
 
 
 def enforce_rate_limits(request: Request, ctx: TenantContext | None, conversation_id: str | None = None) -> None:
-    """Hotel and conversation limits (the IP limit is applied in resolve_guest_context)."""
+    """Tenant, hotel and conversation limits (IP limits are applied in resolve_guest_context).
+
+    The tenant budget stops one hotel group with many hotels from starving shared capacity.
+    """
     s = container_of(request).settings
     if not s.rate_limit_enabled:
         return
     if ctx is not None:
+        _hit(request, RateLimitRule("tenant", ctx.tenant_id, s.rate_limit_tenant_per_minute))
         _hit(request, RateLimitRule("hotel", ctx.hotel_id, s.rate_limit_hotel_per_minute))
     if conversation_id:
         # Keyed per hotel so ids sent to other hotels can't consume this hotel's conversation budget.
@@ -68,10 +74,10 @@ def require_admin(request: Request, tenant_id: str, role: Role, hotel_id: str | 
     container = container_of(request)
     enforce_ip_limit(request)
     if not container.auth.configured:
-        raise AppError(ErrorCode.AUTH_NOT_CONFIGURED, "Admin authentication is not configured for this deployment.", 401)
+        raise AppError(ErrorCode.UNAUTHORIZED, "Admin authentication is not configured for this deployment.", 401, details=[{"reason": "auth_not_configured"}])
     principal = container.auth.authenticate(request.headers.get("Authorization"))
     if principal is None:
-        raise AppError(ErrorCode.AUTHENTICATION_REQUIRED, "Valid credentials are required.", 401, headers={"WWW-Authenticate": "Bearer"})
+        raise AppError(ErrorCode.UNAUTHORIZED, "Valid credentials are required.", 401, headers={"WWW-Authenticate": "Bearer"})
     allowed = principal.can_access_hotel(tenant_id, hotel_id) if hotel_id else principal.can_access_tenant(tenant_id)
     if not allowed or not principal.has_role(role):
         raise AppError(ErrorCode.FORBIDDEN, "You don't have access to this resource.", 403)

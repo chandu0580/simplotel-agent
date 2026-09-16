@@ -1,9 +1,15 @@
 """AI evaluation runner.
 
     python -m evals.run_evals --mode offline                       # deterministic engine, free
-    python -m evals.run_evals --mode ai                            # live model (needs ANTHROPIC_API_KEY; costs tokens)
-    python -m evals.run_evals --mode ai --label glm-dev ...        # non-Anthropic endpoint via ANTHROPIC_BASE_URL: always label it
+    python -m evals.run_evals --mode ai --label <label> --provider-note "..."   # live model from LLM_PROVIDER (costs tokens)
     python -m evals.run_evals --mode offline --baseline evals/results/offline.json   # fail on regressions
+    python -m evals.run_evals --suite holdout --fail-on-critical   # adversarial holdout set; fail if any critical scenario fails
+
+Suites: `development` (evals/scenarios.json) was used while writing prompts and guardrails. `holdout`
+(evals/holdout.json) was written afterwards and must never be used to tune prompts; its purpose is to
+estimate behaviour on attacks nobody optimised for. Scenarios are "critical" when a failure is a safety,
+injection or tenant-isolation problem (explicit "critical" field, or a safety/prompt_injection tag or the
+Multi-tenant category).
 
 Each scenario plays one or more guest turns through `ConversationService`, the same code path
 as the v1 API, with server-side context. Checks are structured wherever possible:
@@ -38,6 +44,8 @@ from app.tenancy import Channel
 
 EVAL_DIR = Path(__file__).parent
 DEFAULT_HOTEL = "hotel-goa-001"
+SUITES = {"development": "scenarios.json", "holdout": "holdout.json"}
+CRITICAL_TAGS = {"safety", "prompt_injection"}
 CATEGORY_TAGS = {
     "Normal question": ["functional", "grounding"],
     "Normal question (room reasoning)": ["functional", "grounding"],
@@ -185,10 +193,17 @@ def summarise(rows: list[dict], mode: str) -> dict:
         "fallback_correctness": f"{sum(r['type'] == 'fallback' for r in fallback_rows)}/{len(fallback_rows)} unsupported questions got a fallback",
         "guardrail_interventions": f"{len(intervened)}/{len(ran)} turns (hallucination/leak guards)",
         "served_by_ai": f"{len(ai_turns)}/{len(ran)}",
+        "critical_passed": f"{sum(r['status'] == 'PASS' for r in ran if r.get('critical'))}/{sum(1 for r in ran if r.get('critical'))}",
         "latency_ms_p50": percentile(latencies, 0.5),
         "latency_ms_p95": percentile(latencies, 0.95),
         "latency_ms_mean": int(statistics.mean(latencies)) if latencies else None,
     }
+
+
+def is_critical(scenario: dict, tags: list[str]) -> bool:
+    if "critical" in scenario:
+        return bool(scenario["critical"])
+    return bool(CRITICAL_TAGS & set(tags)) or scenario["category"] == "Multi-tenant"
 
 
 def compare_with_baseline(rows: list[dict], baseline_path: Path) -> list[str]:
@@ -202,7 +217,7 @@ def build(mode: str) -> tuple[Container, Container]:
     if mode == "ai":
         settings = Settings.from_env()
         if not settings.llm_configured:
-            raise SystemExit("--mode ai needs ANTHROPIC_API_KEY (and AI_ENABLED=true, LLM_PROVIDER=anthropic)")
+            raise SystemExit("--mode ai needs a configured provider: LLM_PROVIDER=glm with LLM_API_KEY and LLM_BASE_URL, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY")
     else:
         settings = Settings.for_tests(log_level="ERROR")
     failing = build_container(Settings.for_tests(log_level="CRITICAL"), llm_provider=_FailingProvider())
@@ -217,20 +232,22 @@ def main() -> int:
     parser.add_argument("--label", help="results file name (default: the mode); always set it for non-Anthropic endpoints")
     parser.add_argument("--provider-note", default="", help="note written at the top of the results file")
     parser.add_argument("--baseline", type=Path, help="previous results .json; exit 3 if a previously passing scenario now fails")
+    parser.add_argument("--suite", choices=sorted(SUITES), default="development")
+    parser.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any critical scenario fails")
     args = parser.parse_args()
 
     container, failing_container = build(args.mode)
     logging.getLogger().setLevel(logging.ERROR)
     today = local_today(container.clock, container.knowledge.profile(DEFAULT_HOTEL).timezone)
     variables = date_vars(today)
-    scenarios = json.loads((EVAL_DIR / "scenarios.json").read_text(encoding="utf-8"))
+    scenarios = json.loads((EVAL_DIR / SUITES[args.suite]).read_text(encoding="utf-8"))
 
     rows = []
     for scenario in scenarios:
         tags = scenario.get("tags") or CATEGORY_TAGS.get(scenario["category"], ["functional"])
         if (args.only and not re.search(args.only, scenario["id"])) or (args.tag and args.tag not in tags):
             continue
-        base = {"id": scenario["id"], "category": scenario["category"], "tags": tags}
+        base = {"id": scenario["id"], "category": scenario["category"], "tags": tags, "critical": is_critical(scenario, tags)}
         if scenario.get("ai_only") and args.mode != "ai":
             rows.append({**base, "status": "SKIP", "latency_ms": 0, "type": "-", "served_by": "-", "reply": "AI-only scenario", "failures": [],
                          "evidence": [], "cited": [], "guardrails": [], "expected_types": []})
@@ -274,16 +291,16 @@ def main() -> int:
 
     label = args.label or args.mode
     versions = sorted({json.dumps(r["versions"], sort_keys=True) for r in rows if r.get("versions")})
-    meta = {"mode": args.mode, "label": label, "run_date": today.isoformat(), "provider_note": args.provider_note, "versions": [json.loads(v) for v in versions]}
+    meta = {"mode": args.mode, "suite": args.suite, "label": label, "run_date": today.isoformat(), "provider_note": args.provider_note, "versions": [json.loads(v) for v in versions]}
     out_dir = EVAL_DIR / "results"
     out_dir.mkdir(exist_ok=True)
     (out_dir / f"{label}.json").write_text(json.dumps({"meta": meta, "summary": summary, "rows": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    lines = [f"# Eval results — `{label}` (mode `{args.mode}`) — run on {today.isoformat()}", ""]
+    lines = [f"# Eval results — `{label}` (mode `{args.mode}`, suite `{args.suite}`) — run on {today.isoformat()}", ""]
     if args.provider_note:
         lines += [f"> {args.provider_note}", ""]
     lines += [f"**{summary['passed']}/{summary['ran']} passed**, {summary['skipped']} skipped", "", "## Quality metrics", "", "| Metric | Value |", "|---|---|"]
-    for key in ("groundedness", "decision_accuracy", "fallback_correctness", "guardrail_interventions", "served_by_ai", "latency_ms_p50", "latency_ms_p95"):
+    for key in ("critical_passed", "groundedness", "decision_accuracy", "fallback_correctness", "guardrail_interventions", "served_by_ai", "latency_ms_p50", "latency_ms_p95"):
         lines.append(f"| {key} | {summary[key]} |")
     lines += ["", "## Pass rate by category", "", "| Tag | Passed |", "|---|---|"] + [f"| {t} | {v} |" for t, v in summary["pass_rate_by_tag"].items()]
     lines += ["", "## Versions under test", ""] + [f"- `{json.dumps(v)}`" for v in meta["versions"]]
@@ -296,8 +313,14 @@ def main() -> int:
     if args.baseline:
         regressions = compare_with_baseline(rows, args.baseline)
         if regressions:
-            print(f"REGRESSIONS vs {args.baseline}: {regressions}")
+            critical = [r["id"] for r in rows if r["id"] in regressions and r.get("critical")]
+            print(f"REGRESSIONS vs {args.baseline}: {regressions} (critical: {critical})")
             return 3
+    if args.fail_on_critical:
+        failed_critical = [r["id"] for r in rows if r.get("critical") and r["status"] == "FAIL"]
+        if failed_critical:
+            print(f"CRITICAL SCENARIOS FAILED: {failed_critical}")
+            return 4
         print(f"No regressions vs {args.baseline}")
     return 0 if summary["passed"] == summary["ran"] else 1
 

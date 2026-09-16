@@ -15,6 +15,7 @@ from ..core.events import DomainEvent, EventPublisher
 from ..core.flags import FeatureFlags
 from ..core.metrics import Metrics
 from ..core.observability import log_event
+from ..core.privacy import Minimised, minimise
 from ..core.tracing import AITrace, TraceSink
 from ..knowledge.provider import KnowledgeProvider
 from ..schemas import ChatReply
@@ -51,7 +52,9 @@ class AssistantService:
         events: EventPublisher,
         traces: TraceSink,
         clock: Clock,
+        mask_contact_details: bool = True,
     ):
+        self.mask_contact_details = mask_contact_details
         self.tenants = tenants
         self.knowledge = knowledge
         self.ai = ai
@@ -73,8 +76,16 @@ class AssistantService:
     def ai_available_for(self, tenant_flags: dict[str, bool]) -> bool:
         return self.ai is not None and self.flags.is_enabled("ai_assistant_enabled", tenant_flags)
 
+    def minimise(self, text: str) -> Minimised:
+        return minimise(text, mask_contact_details=self.mask_contact_details)
+
     def handle(self, request: TurnRequest) -> TurnOutcome:
         started = time.perf_counter()
+        # Personal data never reaches the model, traces or storage (see app.core.privacy). Idempotent, so
+        # text already minimised by ConversationService passes through unchanged.
+        masked = self.minimise(request.message)
+        request.message = masked.text
+        request.history = [item.model_copy(update={"content": self.minimise(item.content).text}) for item in request.history]
         ctx = request.tenant
         trace = AITrace(
             trace_id=ctx.trace_id if ctx.trace_id != "-" else uuid.uuid4().hex,
@@ -86,8 +97,13 @@ class AssistantService:
         )
         self.metrics.assistant_requests_total.labels(ctx.channel).inc()
         try:
+            knowledge_started = time.perf_counter()
             turn = self.resolve_turn(request)
+            trace.knowledge_latency_ms = round((time.perf_counter() - knowledge_started) * 1000, 3)
             trace.knowledge_version = turn.kb.knowledge_version
+            trace.pii_masked = sorted(set(masked.masked))
+            for kind in trace.pii_masked:
+                self.metrics.pii_masked_total.labels(kind).inc()
             self._event("GuestQuestionAsked", ctx, {"message_length": len(request.message), "locale": request.locale})
             outcome = self._respond(turn, trace)
         except Exception as exc:
@@ -98,7 +114,10 @@ class AssistantService:
             raise
 
         trace.reply_type, trace.success = outcome.reply.type, True
-        trace.total_latency_ms = int((time.perf_counter() - started) * 1000)
+        total_ms = (time.perf_counter() - started) * 1000
+        trace.total_latency_ms = int(total_ms)
+        trace.tool_latency_ms = float(sum(c.latency_ms for c in trace.tool_calls))
+        trace.app_latency_ms = round(max(total_ms - (trace.llm_latency_ms or 0) - trace.tool_latency_ms, 0.0), 3)
         self._observe(ctx, outcome, trace)
         self.traces.record(trace)
         return outcome
@@ -131,6 +150,11 @@ class AssistantService:
 
     def _observe(self, ctx, outcome: TurnOutcome, trace: AITrace) -> None:
         self.metrics.assistant_success_total.labels(outcome.mode).inc()
+        mode = trace.mode or outcome.mode
+        self.metrics.turn_latency_ms.labels(mode).observe(trace.total_latency_ms or 0)
+        self.metrics.app_latency_ms.labels(mode).observe(trace.app_latency_ms or 0)
+        if trace.retrieval_latency_ms is not None:
+            self.metrics.retrieval_latency_ms.observe(trace.retrieval_latency_ms)
         self.metrics.assistant_replies_total.labels(outcome.reply.type, outcome.mode).inc()
         if outcome.reply.type == "fallback":
             self.metrics.unsupported_question_total.inc()

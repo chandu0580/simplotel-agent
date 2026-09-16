@@ -4,21 +4,29 @@ How the guest assistant spends money, what the knobs are, and how to measure it 
 exists. Written for engineering and product leads deciding how to run the assistant economically.
 
 > **Status of the numbers in this document.**
-> There is no production traffic and the live Anthropic API has **not** been verified. Every dollar
-> figure below is **illustrative — verify current pricing before use**. Token counts are either
-> measured on the demo hotel (stated as such) or explicit assumptions. No infrastructure or real
-> spend figures are given.
+> There is no production traffic, and the live Anthropic API has **not** been verified (no Anthropic
+> credential). Every dollar figure below is **illustrative — verify current pricing before use**.
+> Token counts are either measured on the demo hotel (stated as such) or explicit assumptions. No
+> infrastructure or real spend figures are given.
 
-Illustrative list prices used throughout (Anthropic list prices as cached 2026-06; USD per 1M tokens):
+**Which provider these prices describe.** The default runtime provider is GLM (`LLM_PROVIDER=glm`,
+model `glm-5.2`). **This document has no GLM price data**, so no GLM dollar figures are given. The
+dollar examples below use Anthropic list prices and apply only to the alternative Anthropic adapter
+(`LLM_PROVIDER=anthropic`, default model `claude-opus-5`). The token model in section 2 and the levers
+in section 4 apply to either provider; to estimate GLM cost, substitute the GLM prices that apply to
+your contract.
+
+Illustrative list prices used for the Anthropic examples (Anthropic list prices as cached 2026-06; USD per 1M tokens):
 
 | Model | Input | Output | Notes |
 |---|---:|---:|---|
-| `claude-opus-5` (current default) | $5.00 | $25.00 | Adaptive thinking tokens are billed as output |
+| `claude-opus-5` (Anthropic adapter default) | $5.00 | $25.00 | Adaptive thinking tokens are billed as output |
 | `claude-sonnet-5` | $2.00 | $10.00 | |
 | `claude-haiku-4-5` | $1.00 | $5.00 | |
 
 Prompt-cache reads are billed at a discounted fraction of the input price, and cache writes may carry
-a premium — check current cache pricing; this document does not assume a multiplier.
+a premium — check current cache pricing; this document does not assume a multiplier. Whether and how
+a GLM endpoint discounts cached tokens is not known here.
 
 ---
 
@@ -43,19 +51,19 @@ input tokens by the number of iterations, each re-sending the full prompt plus g
 | **Prompt `P`** (system prompt + tool schemas) | `render_system_prompt` injects every knowledge entry (`FullContextRetriever`) plus 3 tool schemas | Hotel knowledge-base size. Measured on the demo hotel: ≈2.8k tokens (≈9.5k chars prompt + ≈1.7k chars tool JSON) |
 | **History `H`** | `ConversationService.post_message` sends the last `conversation_context_window` = **12** stored messages (each truncated to 4,000 chars) | Conversation length, up to the window |
 | **Message `M`** | `build_messages`: a `<context>` block (date, booking details, locale) + the guest message (max 1,000 chars) | Guest verbosity |
-| **Output + thinking `O`** | Tool-call arguments plus adaptive thinking at `ANTHROPIC_EFFORT` (default `low`) | Effort level, question complexity; hard cap `LLM_MAX_TOKENS` = 16,000 |
+| **Output + thinking `O`** | Tool-call arguments, plus any reasoning tokens the model bills as output. With the Anthropic adapter, adaptive thinking at `ANTHROPIC_EFFORT` (default `low`); effort is not sent to GLM | Effort level (Anthropic), question complexity; hard cap `LLM_MAX_TOKENS` = 16,000 |
 
-Output tokens cost 5× input on every model above, so `O` matters more per token than `P`, but `P`
+Output tokens cost 5× input on every Anthropic model above, so `O` matters more per token than `P`, but `P`
 is re-sent on every turn and usually dominates volume.
 
 ### Paths that cost nothing (or extra)
 
 - **Input guardrail blocks** (`InputGuardrails.check`, e.g. exfiltration attempts) return a canned reply before any LLM call — **0 tokens**.
-- **Offline engine** (`OfflineAssistant`) — used when `ai_assistant_enabled` is off for a tenant, when no API key is configured, or after an `LLMError` — is deterministic keyword matching — **0 tokens**.
+- **Offline engine** (`OfflineAssistant`) — used when `ai_assistant_enabled` is off for a tenant, when no LLM provider is configured, or after an `LLMError` — is deterministic keyword matching — **0 tokens**.
 - **Booking-form availability searches** (`ConversationService.check_availability`) never touch the LLM — **0 tokens**.
 - **Failed-after-spend turns**: a response that is truncated (`max_tokens`), refused, or has invalid output is billed and *then* falls back to the offline engine. These are pure waste; they should be rare and are visible via `assistant_fallback_total{reason}`.
-- **Refusal fallback**: with `ANTHROPIC_REFUSAL_FALLBACK=default`, the API re-runs a policy-declined request once on a substitute model server-side. Assume that turn can be billed for more than one attempt (verify with current API docs).
-- **Retries**: the SDK client is built with `max_retries=LLM_MAX_RETRIES` (default 1) and a 20 s timeout. Retries on connection errors, 429s and 5xxs can re-send the full prompt; a request that times out client-side may still have been processed and billed.
+- **Refusal fallback** (Anthropic adapter only): with `ANTHROPIC_REFUSAL_FALLBACK=default`, the API re-runs a policy-declined request once on a substitute model server-side. Assume that turn can be billed for more than one attempt (verify with current API docs).
+- **Retries**: both adapters use `LLM_MAX_RETRIES` (default 1) and `LLM_TIMEOUT_SECONDS` (default 20 s). The GLM adapter retries timeouts, connection errors and HTTP 408/409/429/5xx/529, with jittered backoff; the Anthropic adapter uses the SDK's own retries. A retry re-sends the full prompt, and a request that times out client-side may still have been processed and billed.
 
 ---
 
@@ -72,12 +80,12 @@ cost(turn)          = (1 − h)·P·p_in            # uncached prefix
 ```
 
 - `P` prompt + tool schemas, `H` history tokens, `M` message + context-block tokens, `O` output incl. thinking.
-- `h` cache-hit fraction for the prefix (0 ≤ h ≤ 1). The system block carries `cache_control: ephemeral`, so only the system prompt/tools prefix is a cache candidate.
+- `h` cache-hit fraction for the prefix (0 ≤ h ≤ 1). With the Anthropic adapter the system block carries `cache_control: ephemeral`, so only the system prompt/tools prefix is a cache candidate. The GLM adapter sends no cache directive; it records cached prompt tokens when the endpoint reports them.
 - `p_in`, `p_out`, `p_cache_read` are per-token prices. Cache writes on misses may add a premium on top of `p_in`.
 
 On the Anthropic API, `usage.input_tokens` counts only the *uncached* part; cache reads and cache writes appear
 separately as `cache_read_input_tokens` and `cache_creation_input_tokens` (recorded by the app as
-`cache_read_tokens` / `cache_write_tokens`). The total prompt is the sum of all three.
+`cache_read_tokens` / `cache_write_tokens`). The total prompt is the sum of all three. With the GLM adapter the app records the endpoint's reported prompt tokens and, when present, cached tokens as `cache_read_tokens`; cache writes are not reported.
 
 ### Shape examples (not Claude)
 
@@ -91,10 +99,10 @@ Anthropic-compatible gateway), so they show shape, not Claude numbers:
 
 Call A shows the intended pattern: the ≈2.8k prefix served from cache, only ~140 fresh tokens.
 Call B shows an uncached prompt of similar size with a short output. Output varied ~6× between the
-two, which is why `O` below is a range-driven assumption. The eval result files
-(`backend/evals/results/glm-dev-v1.1-run{1,2}.json`) record no token counts.
+two, which is why `O` below is a range-driven assumption. The eval result files, including the
+current GLM-native adapter runs (`backend/evals/results/glm-5.2-*.json`), record no token counts.
 
-### Worked example (illustrative — verify current pricing before use)
+### Worked example (Anthropic adapter; illustrative — verify current pricing before use)
 
 Assumptions (not measurements, except `P`):
 
@@ -169,7 +177,7 @@ table as a way to reason about orders of magnitude and which lever matters, noth
 
 Free wins first; quality trade-offs last and only behind evals (`docs/EVALUATION.md`).
 
-1. **Prompt caching with a byte-stable system prompt.** Already wired: the system block is sent with
+1. **Prompt caching with a byte-stable system prompt.** Already wired for the Anthropic adapter: the system block is sent with
    `cache_control: ephemeral`, and `AIAssistant` memoises the rendered prompt keyed by
    `(hotel_id, knowledge_version, hash(evidence ids))`. Caching is an exact-prefix match, so a single
    changed byte (a timestamp, reordered entries, a per-request value) turns every call into a cache miss
@@ -179,7 +187,8 @@ Free wins first; quality trade-offs last and only behind evals (`docs/EVALUATION
    *Caveats to verify:* Anthropic models have a minimum cacheable prefix length that may exceed the
    ≈2.8k-token demo prefix, so small hotels may get no caching at all; cache entries expire after a
    short idle TTL, so low-traffic hotels will miss often; tool definitions must also be byte-stable
-   (they vary with `tenant_flags`). Measure the hit rate before counting on savings.
+   (they vary with `tenant_flags`). Measure the hit rate before counting on savings. For GLM, whether
+   the endpoint caches the stable prefix is not known; the recorded cached-token count shows it.
 2. **Trim the history window.** `CONVERSATION_CONTEXT_WINDOW=12` is a config change. Most hotel
    questions need the booking context (already sent structurally) more than old turns. Validate with the
    `conversation` eval tag before lowering.
@@ -187,16 +196,17 @@ Free wins first; quality trade-offs last and only behind evals (`docs/EVALUATION
    under `FullContextRetriever`. A top-k retriever caps `P`, but can miss the relevant entry (a grounding
    failure) and makes the evidence set — and therefore the cached prefix — vary per question, which
    lowers cache hits. Switch per hotel only when `P` is large enough to outweigh both effects.
-4. **Tune effort per route via evals.** Default is `low`. Raising effort raises thinking (output-priced)
+4. **Tune effort per route via evals** (Anthropic adapter). Default is `low`. Raising effort raises thinking (output-priced)
    tokens; do not raise it without an eval showing a quality gain worth the cost.
 5. **Deterministic short-circuits.** Input guardrail blocks already cost nothing. Routing trivial FAQ
    questions (e.g. "what time is check-in?") to the offline engine would also cost nothing, but the
    offline engine returns raw knowledge text, cannot handle follow-ups or language nuance, and
    misroutes are a guest-visible quality drop. Only consider with a high-precision matcher and evals.
 6. **Model routing via `ModelRouter`.** Routes are per task (`GUEST_TURN`, `INTENT_CLASSIFICATION`,
-   `CONVERSATION_SUMMARY`, `EVAL_JUDGE`). Today every task maps to the configured models, and
-   `ANTHROPIC_MODEL_FAST` defaults to the primary model. Moving `GUEST_TURN` (or a subset of turns) to
-   Sonnet or Haiku is the largest single lever in section 2, and should happen only after evals show
+   `CONVERSATION_SUMMARY`, `EVAL_JUDGE`). Today every task maps to the configured models, and the fast
+   model (`LLM_MODEL_FAST`, or `ANTHROPIC_MODEL_FAST` with the Anthropic adapter) defaults to the primary
+   model. With the Anthropic adapter, moving `GUEST_TURN` (or a subset of turns) to Sonnet or Haiku is
+   the largest single lever in section 2, and should happen only after evals show
    parity on grounding, tool-calling and safety tags.
 7. **Per-tenant budgets, quotas and rate limits.** Cap spend per hotel (see section 5) so one tenant
    cannot consume a disproportionate share, and align quotas with commercial plans.
@@ -214,11 +224,11 @@ Free wins first; quality trade-offs last and only behind evals (`docs/EVALUATION
 | Control | Current state | What it bounds |
 |---|---|---|
 | `max_tokens` | `LLM_MAX_TOKENS=16000` per call | Worst-case output per call: 16,000 × $25/1M = **$0.40 on Opus 5** (illustrative). Generous relative to a ~400-token typical reply; consider lowering after measuring the real `O` distribution, keeping headroom for thinking so replies are not truncated |
-| Rate limits | Per IP 60/min, per conversation 20/min, per hotel 1,200/min (`RATE_LIMIT_*`); cannot be disabled in production | Request volume. Note the per-hotel limit alone permits a theoretical ceiling of 1,200 × $0.40 = $480/min of output on Opus 5 if every call hit `max_tokens` — rate limits bound abuse, not spend |
+| Rate limits | Per IP burst 30 per 10 s, per IP 60/min, per tenant 3,000/min, per hotel 1,200/min, per conversation 20/min (`RATE_LIMIT_*`); cannot be disabled in production | Request volume. Note the per-hotel limit alone permits a theoretical ceiling of 1,200 × $0.40 = $480/min of output on Opus 5 if every call hit `max_tokens` — rate limits bound abuse, not spend |
 | Message length | `MAX_MESSAGE_CHARS = 1000` | `M` |
 | History window | 12 messages, each truncated to 4,000 chars | `H` |
 | Stored messages | `CONVERSATION_MAX_MESSAGES=40` | Storage, not tokens |
-| Kill switch | `ai_assistant_enabled` feature flag, per tenant (and `AI_ENABLED` globally) | Stops all LLM spend for a tenant; guests get the offline engine with a notice |
+| Kill switch | `ai_assistant_enabled` feature flag, per tenant (and `AI_ENABLED` globally, or `LLM_PROVIDER=none`) | Stops all LLM spend for a tenant; guests get the offline engine with a notice |
 
 **Proposed (not implemented):**
 
@@ -247,11 +257,15 @@ Proposed practice:
 
 ## 7. Non-LLM costs (qualitative)
 
-Numbers are intentionally omitted; there is no deployment to measure.
+Numbers are intentionally omitted; there is no deployment to measure. A local load test exists
+([PERFORMANCE.md](PERFORMANCE.md)) but is a single-machine benchmark, not production capacity.
 
 - **Compute.** App overhead per turn is a few milliseconds (guardrails, prompt assembly, tool
   execution); the API process mostly waits on the LLM. Sizing is driven by concurrent in-flight LLM
-  calls and timeouts, not CPU.
+  calls and timeouts, not CPU: in the local load test with a simulated 1.5 s model, AI-turn throughput
+  was bounded by the worker thread pool (`WORKER_THREADS`, default 150).
+- **Shared state.** Multi-replica deployments add Redis (`STATE_BACKEND=redis`) and optionally
+  PostgreSQL for the audit trail.
 - **Storage.** Conversations (TTL 24 h, capped at 40 messages), knowledge bases and tenant config are
   small. Retention of traces and events is the larger, policy-driven item.
 - **Observability.** Structured `ai_trace` logs are emitted per turn; log ingestion and retention

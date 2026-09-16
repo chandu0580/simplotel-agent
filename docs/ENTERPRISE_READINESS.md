@@ -1,86 +1,81 @@
-# Enterprise readiness matrix
+# Readiness matrix
 
-**State: enterprise architecture foundation. Not a production deployment.**
+**State: hardened modular monolith with local evidence. Not deployed to production, not production-ready.**
 
-Nothing here has run in production, handled real guest traffic, been load tested, or been verified against the live Anthropic API. There is no Anthropic credential, so all model-behaviour evidence comes from offline tests, scripted providers, and a GLM development provider that is not Claude.
+Evidence below comes from automated tests, local runs against real Redis and PostgreSQL containers, a local three-replica Docker stack, a local load test, and live evaluations against a **GLM 5.2 development gateway**, which is the default runtime provider. The Anthropic adapter is tested only against a mocked HTTP transport. **Anthropic live API: NOT VERIFIED — no Anthropic credential.** The GitHub Actions workflows have **not been run on GitHub**.
 
 ## Status legend
 
 | Status | Meaning |
 |---|---|
-| **IMPLEMENTED** | Working code on the request path, covered by automated tests |
-| **IMPLEMENTED (prototype)** | Working and tested, but single-process, in-memory or mock. Needs a production backing service |
-| **DESIGNED** | The interface or boundary exists in code; there is no production implementation |
-| **DOCUMENTED** | Design written down; no code |
+| **IMPLEMENTED + TESTED** | Code on the running path, with automated tests or a recorded local run that exercises it |
+| **IMPLEMENTED + NOT VERIFIED** | Code exists but has not been exercised in the environment where it matters (e.g. CI on GitHub) |
+| **DESIGNED** | An interface, schema or written design exists; no working implementation on the running path |
+| **NOT IMPLEMENTED** | Nothing beyond, at most, a placeholder |
 
 ## Capabilities
 
-| Capability | Status | Evidence | What production still needs |
+| Capability | Status | Evidence | Remaining gap |
 |---|---|---|---|
-| Multi-tenancy boundary | IMPLEMENTED | `app/tenancy.py`, tenant-scoped repositories, 2 demo tenants; `tests/test_tenancy.py` (cross-hotel 404s, per-hotel knowledge and inventory, per-tenant flags) | Persistent tenant registry; row-level security or schema isolation in the database |
-| Hotel configuration | IMPLEMENTED | `HotelProfile` (brand, languages, time zone, contact, check-in/out), rooms, per-hotel JSON; `/api/v1/hotels/{id}` | Admin write API with approval and audit |
-| Knowledge abstraction | IMPLEMENTED | `KnowledgeProvider` + `JsonKnowledgeProvider`; contract test | Database/CMS-backed provider |
-| Knowledge lifecycle | IMPLEMENTED | draft/published/archived, `version`, `effective_from/until`, `updated_by`; drafts and expired entries never served or citable; `knowledge_version`; tests in `test_knowledge.py` | Publishing workflow, approvals, history |
-| RAG abstraction | DESIGNED | `Retriever`, `Evidence`, `RetrievalResult`; full-context and keyword retrievers implemented; enabling semantic retrieval fails startup instead of silently degrading | Embeddings, vector index, hybrid ranking; only when content outgrows the prompt |
-| LLM provider abstraction | IMPLEMENTED | `LLMProvider`; Anthropic adapter (tested against the real SDK with a mocked HTTP transport) and a scripted provider; contract tests | Live Anthropic verification; OpenAI/Gemini adapters if needed (not built) |
-| Model routing | IMPLEMENTED (prototype) | `ModelRouter` with per-task routes from config; only `GUEST_TURN` has a caller | Routed tasks (classification, summarisation) validated by evals |
-| Tool framework | IMPLEMENTED | `ToolRegistry`: lookup, exposure, flags, argument validation, timeout, audit log, metrics, events; `test_tools_and_resilience.py` | — |
-| Tool authorization | IMPLEMENTED | READ_ONLY vs MUTATING policies, roles, tenant/hotel scope, guest confirmation, idempotency key; model can't call unexposed tools (tested with a compliant, "attacking" model) | Real guest authentication to supply principals |
-| Idempotency | IMPLEMENTED (prototype) | `InMemoryIdempotencyStore`: same key + same request returns the same booking; different request conflicts; 8 concurrent duplicates create 1 booking | Unique constraint in the booking database, in the same transaction |
-| Reservation provider | IMPLEMENTED (prototype) | `ReservationProvider`, mock provider, resilience wrapper (timeout, read retries, circuit breaker ignoring business errors, TTL cache, no mutation retries) | Real PMS/CRS/channel-manager adapter |
-| Conversation service | IMPLEMENTED (prototype) | Server-side context, window, cap, sliding TTL, deletion, per-conversation lock; `test_conversations_v1.py` | Shared store (Redis/Postgres) with optimistic concurrency for multiple replicas |
-| Guardrails | IMPLEMENTED | Input: exfiltration block, injection flags, prompt-tag neutralisation (current and replayed history). Output: secret/prompt leakage, citation validation, unsupported prices, inventory claims, suggestion and form-message checks | Semantic groundedness checking (LLM judge on sampled traffic); PII redaction before model calls |
-| Prompt injection tests | IMPLEMENTED | `tests/test_guardrails.py` (model scripted to comply); eval scenarios `injection-*` (offline and GLM development provider) | Live-model red-teaming |
-| Observability (logs) | IMPLEMENTED | Structured JSON logs, request/trace/tenant/hotel/conversation context, secret redaction; tested | Log shipping, retention |
-| AI tracing | IMPLEMENTED | `AITrace` per turn: provider, model, prompt/tool/knowledge versions, evidence, citations, tool calls, guardrails, tokens (including cache reads/writes), latency, fallback reason; pluggable `TraceSink` | OpenTelemetry/LangSmith exporter |
-| Metrics | IMPLEMENTED | Prometheus `/metrics`, low-cardinality labels; tested | Prometheus/Grafana deployment, alerting |
-| Product metrics | DOCUMENTED | Definitions and proxies in `OBSERVABILITY.md` | Analytics pipeline; booking-engine events for conversion |
-| Domain events | IMPLEMENTED (prototype) | Typed events without message text; logged plus in-memory publisher | Outbox table plus broker once consumers exist |
-| Rate limiting | IMPLEMENTED (prototype) | Per IP (before hotel resolution), hotel and conversation; admin endpoints; 429 with Retry-After; tested | Shared limiter (Redis) or gateway/WAF; tenant and API-key dimensions |
-| Caching | IMPLEMENTED (prototype) | `Cache` interface, TTL cache for knowledge and short-TTL availability; TTL 0 disables | Shared cache for multiple replicas |
-| API versioning | IMPLEMENTED | `/api/v1`; legacy endpoints kept with Deprecation/Link headers; OpenAPI snapshot contract test (`docs/openapi.json`) | — |
-| Error model | IMPLEMENTED | Stable UPPER_SNAKE codes with request id; no stack traces; legacy format preserved | — |
-| Authentication boundary | DESIGNED | `AuthProvider`; default provider refuses (401 `AUTH_NOT_CONFIGURED`); development static tokens rejected in production config | OIDC/JWT validation at gateway or in `AuthProvider` |
-| RBAC boundary | IMPLEMENTED | Roles guest → platform_admin with hierarchy, tenant and hotel scoping; admin API tests | Real identity provider supplying roles |
-| Admin / hotel operations API | IMPLEMENTED (prototype) | Read-only: list hotels, knowledge with lifecycle, AI config and versions | Write operations with audit and approvals |
-| AI evaluation framework | IMPLEMENTED | 34 scenarios with tags; structured checks (decision, tool arguments, guardrails, no-model-call, sources, availability fields); quality metrics; baseline regression gate in CI | Larger dataset from real (anonymised) traffic; LLM-judge grading; live Claude runs |
-| Prompt/model versioning | IMPLEMENTED | `prompt_version`, `tool_schema_version`, `knowledge_version`, model in traces, API `meta`, admin config, eval results | Prompt registry with staged rollout |
-| Feature flags | IMPLEMENTED | Safe defaults, env and per-tenant overrides, unknown flags fail fast | Runtime updates without restart |
-| Configuration | IMPLEMENTED | Environment-aware settings with production validation; `.env.example` parse-tested | Secret manager integration |
-| CI/CD | DESIGNED | `.github/workflows/ci.yml` (lint, tests, eval gate, dependency audit, E2E, docker smoke), `ai-eval.yml` (manual, secret-gated). **Not yet run on GitHub** | First run on GitHub; deployment pipeline; image signing |
-| Docker | IMPLEMENTED | Multi-stage, digest-pinned, non-root, health checks; compose with read-only FS and dropped capabilities. Built and run locally: both healthy, no secrets or `.env` inside images, security headers verified | Registry, image scanning, SBOM |
-| Health / readiness | IMPLEMENTED | `/health` (event loop), `/ready` (knowledge required; reservations degraded ≠ not ready); tested | Orchestrator probes |
-| Accessibility | IMPLEMENTED | Live region with `aria-busy`, alerts, labels, focus into new forms, `lang` attribute, keyboard-operable controls, reduced motion; frontend tests | Full screen-reader and contrast audit |
-| Internationalisation | IMPLEMENTED (prototype) | UI catalogues (English complete, Hindi draft), locale sent to backend, AI told the reply language; tested | Native review of Hindi; localised offline answers and backend strings |
-| Voice readiness | DESIGNED | Channel-independent core; voice render adapter (speakable text, capped options); tested | Telephony, STT/TTS, latency budget, barge-in |
-| WhatsApp readiness | DESIGNED | WhatsApp render adapter (text, button limits); tested | Webhook with signature verification, session window, templates |
-| Threat model | DOCUMENTED | [THREAT_MODEL.md](THREAT_MODEL.md) | Penetration test |
-| SRE design | DOCUMENTED | [SRE.md](SRE.md): proposed SLOs, degradation matrix, runbooks | On-call, alerting, measured SLOs |
-| Observability design | DOCUMENTED | [OBSERVABILITY.md](OBSERVABILITY.md): dashboards and proposed alerts | Deployed dashboards |
-| Cost model | DOCUMENTED | [COST_MODEL.md](COST_MODEL.md): illustrative arithmetic at list prices | Real usage data |
-| Scalability design | DOCUMENTED | [ENTERPRISE_ARCHITECTURE.md](ENTERPRISE_ARCHITECTURE.md): 1 → 10,000+ hotels path | Load testing |
-| Disaster recovery | DOCUMENTED | [SRE.md](SRE.md): proposed RPO/RTO, provider outage behaviour | Backups, restore drills |
+| GLM runtime provider (default) | IMPLEMENTED + TESTED | `app/llm/glm_provider.py`: forced tool call, typed errors, retry policy, HTTPS required in production. Contract tests with mocked transport; real slow-server timeout test. Live GLM 5.2: development suite 34/34 (`glm-5.2-final`, also adapter runs 1–2: 34/34), holdout 12/12 | Production GLM endpoint not chosen; provider SLA, quota and data terms not assessed |
+| Anthropic provider (alternative) | IMPLEMENTED + NOT VERIFIED | Adapter tested with the real SDK against a mocked HTTP transport; provider-neutral contract and failure tests | **Live verification: NOT VERIFIED — no Anthropic credential** |
+| Provider-neutral contract | IMPLEMENTED + TESTED | `tests/test_contracts.py`: tool calls, no tools on `generate`, and timeout / 503 / plain-text output → identical fallback and public code across anthropic, glm and scripted providers (9 cases) | — |
+| Multi-tenancy (application) | IMPLEMENTED + TESTED | Tenant-scoped repositories and keys; cross-hotel 404s (`test_tenancy.py`); cross-tenant read on another replica → 404; holdout `holdout-cross-tenant-facts` (offline and GLM) | Persistent tenant registry; tenant admin API |
+| Tenant isolation (database) | IMPLEMENTED + TESTED | `migrations/0001`: tenant_id everywhere, composite FKs, RLS forced on 11 tables. Against PostgreSQL 17 with a non-superuser role: RLS hides and blocks cross-tenant reads and writes; FKs block cross-tenant references even for a superuser | Only the audit sink writes to PostgreSQL; other repositories DESIGNED |
+| Shared state for replicas (Redis) | IMPLEMENTED + TESTED | `app/state/redis_backend.py`. Real Redis 7.4: CAS + TTL, shared limits, locks, idempotency once across stores. Three in-process replicas: no lost turns, one booking, shared limits. Three containers: 33/33 edge checks, one booking across simultaneous replicas | Redis TLS/auth not exercised; Redis high availability not tested |
+| Concurrency safety | IMPLEMENTED + TESTED | Lease locks + compare-and-set versions; with locks disabled CAS alone rejected 5 of 6 concurrent writers (409), no lost update; 409 `CONVERSATION_BUSY` + client auto-retry | — |
+| Idempotent bookings | IMPLEMENTED + TESTED | Same key → one booking across 9 concurrent calls on 3 replicas and 3 containers; conflict on reuse; one durable `BookingConfirmed` per booking; unique DB constraint tested | Bookings not persisted to PostgreSQL; key not forwarded to a real PMS (none exists) |
+| Reservation provider contract | IMPLEMENTED + TESTED | Typed results and errors, tenant context, timeout, read-only retries with overall deadline, breaker, audit events ([RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md)) | Real PMS/CRS adapter NOT IMPLEMENTED |
+| Circuit breaker | IMPLEMENTED + TESTED | Single half-open trial (5 concurrent callers → 1 trial), failed trial reopens, business errors never count, retries count once | Per-process state (by design) |
+| Timeouts | IMPLEMENTED + TESTED | LLM HTTP timeouts close the connection (real slow server); tool and integration timeouts; retry deadline below tool timeout | Timed-out Python threads are not cancelled (documented; mutations rely on idempotency) |
+| Error model | IMPLEMENTED + TESTED | Stable codes and envelope, `meta.degradation`, no stack traces (`tests/test_errors.py`: 422, 404, 405, 413, 503 knowledge, 500 hidden detail, degradation per failure kind) | — |
+| Rate limiting | IMPLEMENTED + TESTED | ip_burst, ip (before hotel resolution), tenant, hotel, conversation; 429 + Retry-After; shared across replicas in Redis (exactly 30 of 60 through the 3-replica edge) | Fails open when Redis is down (deliberate); no API-key dimension; no WAF |
+| Security test suite | IMPLEMENTED + TESTED | Guardrail, injection, exfiltration, tool-authorization, cross-tenant, error and privacy tests; holdout adversarial evals (offline 12/12, GLM 12/12, critical 10/10) | Penetration test; live-model red teaming beyond 12 holdout scenarios |
+| Secret hygiene | IMPLEMENTED + TESTED | `scripts/scan_secrets.py`: tracked files 0 findings, frontend bundle 0, backend image filesystem 0, eval results 0; settings `repr` and log redaction tests | Scanner not yet run in GitHub CI; no history rewrite scan tool (gitleaks) |
+| Security headers | IMPLEMENTED + TESTED | CSP, nosniff, DENY, no-referrer, Permissions-Policy on every nginx location; checked automatically by `verify_stack.py`; HSTS snippet for the TLS edge; backend sends HSTS in production | TLS edge not built, so HSTS delivery is untested |
+| Privacy (minimisation) | IMPLEMENTED + TESTED | Card/email/phone masking before model, storage and traces; false-positive tests; `pii_masked_total` ([PRIVACY.md](PRIVACY.md)) | Names/addresses not detected |
+| Retention and deletion | IMPLEMENTED + TESTED | Conversation TTL (memory and Redis), DELETE → 404 thereafter, DB retention job under RLS | Retention job not scheduled; log retention not configured |
+| Observability | IMPLEMENTED + TESTED | Access logs and traces carry request, trace, tenant, hotel and conversation ids; latency breakdown; metrics asserted to move (`tests/test_observability.py`) | Log shipping, dashboards, alerting, trace export not deployed |
+| Performance evidence | IMPLEMENTED + TESTED | `perf/load_test.py` at 10/25/50/100 users, 0% errors; thread-pool bottleneck found and relieved ([PERFORMANCE.md](PERFORMANCE.md)) | Local benchmark only; no multi-worker, Redis-backed or real-model load test |
+| Evaluation gates | IMPLEMENTED + TESTED | 34-scenario development suite, 12-scenario holdout, critical flag, `--fail-on-critical` (exit 4), `--baseline` (exit 3); offline 28/28 (critical 14/14) | Larger dataset from real traffic; LLM-judge grading |
+| CI (standard) | IMPLEMENTED + NOT VERIFIED | `ci.yml`: backend, integration with Redis/PostgreSQL services, security scan, frontend with bundle scan, e2e, docker incl. 3-replica verification. Every step was run locally, not as a workflow | First run on GitHub |
+| CI (live AI eval) | IMPLEMENTED + NOT VERIFIED | `live-ai-eval.yml`: manual, provider choice, protected secrets, sanitised inputs | First run; environment secrets |
+| Docker images | IMPLEMENTED + TESTED | Non-root (10001 / 101), digest-pinned, health checks, no secrets, backend 71.2 MB compressed | Registry, signing, SBOM, vulnerability scan |
+| Graceful shutdown | IMPLEMENTED + TESTED | SIGTERM → exit 0 in ~2.1 s, audit flush and client close, edge kept serving 12/12 | Readiness does not flip to draining on SIGTERM |
+| Migrations | IMPLEMENTED + TESTED | Ordered, transactional, checksummed, advisory-locked; migration job in compose | Rollback strategy (forward-only by design) |
+| Configuration and flags | IMPLEMENTED + TESTED | Startup validation incl. HTTPS, mock and lease rules; unknown flags fail startup ([CONFIGURATION.md](CONFIGURATION.md)) | Runtime flag changes; secret manager |
+| Frontend resilience | IMPLEMENTED + TESTED | 19 Vitest tests incl. busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 6/6 (desktop + mobile) | Full screen-reader audit |
+| Admin authentication | DESIGNED | `AuthProvider` boundary; default refuses with 401 `UNAUTHORIZED` | OIDC/JWT NOT IMPLEMENTED |
+| Guest authentication | NOT IMPLEMENTED | Booking tools require a principal that nothing issues | Identity provider integration |
+| Semantic retrieval | NOT IMPLEMENTED | Flag fails startup if enabled | Only if knowledge outgrows the prompt |
+| WhatsApp / voice channels | DESIGNED | Render adapters with tests; flags reserved | Webhooks, telephony |
+| Production deployment | DESIGNED | [DEPLOYMENT.md](DEPLOYMENT.md) proposed topology | Everything cloud-side |
+| SLOs / on-call | DESIGNED | [SRE.md](SRE.md) proposals | Measured SLOs, alerting, on-call |
 
-## Verification evidence (run 2026-09-16)
+## Verification evidence (run 2026-09-16, final code)
 
 | Check | Result |
 |---|---|
-| Backend pytest | **203 passed** |
-| Frontend Vitest | **13 passed** |
-| Playwright E2E (desktop + Pixel 7, AI disabled) | **6 passed** |
-| Lint and type checks | ruff, oxlint and tsc clean |
-| Offline eval | **28/28** (34 scenarios, 6 AI-only skipped); groundedness 15/15; baseline gate: no regressions |
-| GLM development-provider eval (not Claude) | 33/34 and 34/34 on this architecture; final run after review fixes 32/34 (1 plain-text-instead-of-tool fallback; 1 false-negative check, since corrected). Decision accuracy 18/18 in every run |
-| Local performance (in-process, no network or LLM) | HTTP conversation turn p50 8.6 ms / p95 11.0 ms; AI turn app overhead p50 2.1 ms (`backend/perf/results.md`) |
-| Docker | Both images built and healthy; no secrets or `.env` in image filesystems; headers, non-root user, read-only FS, unexposed `/metrics` verified manually |
-| Anthropic live API | **Not verified** (no credential) |
+| Backend pytest with Redis 7.4 + PostgreSQL 17 containers | **292 passed** |
+| Backend pytest without services (CI `backend` job equivalent) | **270 passed, 22 skipped** (integration) |
+| Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
+| Frontend Vitest | **19 passed** |
+| Playwright E2E (desktop + mobile, AI disabled) | **6 passed** |
+| Offline eval, development suite | **28/28** (6 AI-only skipped), critical 14/14, no regressions vs baseline |
+| Offline eval, holdout suite | **12/12**, critical 10/10 |
+| GLM 5.2 live, development suite (runtime evidence, not Claude) | **34/34**, critical 14/14, decision accuracy 18/18, groundedness 14/14, p50 3.7 s / p95 10.1 s, no regressions vs adapter run 2 (`evals/results/glm-5.2-final`) |
+| GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/glm-5.2-holdout-run1`) |
+| Three-replica Docker stack (AI disabled) | `verify_stack.py --expect-shared-state` **33/33**; simultaneous booking in 3 containers → one booking id, created on one replica |
+| Load test (local, not capacity) | 0% errors at 10–100 users in all scenarios; see [PERFORMANCE.md](PERFORMANCE.md) |
+| Secret scans | 0 findings: tracked files, new files, frontend bundle, backend image filesystem |
+| Anthropic live API | **NOT VERIFIED — no Anthropic credential** |
+| GitHub Actions | **Not run** (workflows exist; no push was made) |
 
 ## Not claimed
 
-- Production readiness
-- Proven high availability
-- Support for 10,000 hotels
-- Compliance certification
-- A real booking integration
-- Live Anthropic verification
-- Achieved SLOs
+- Production readiness or production capacity
+- Live Anthropic Claude verification
+- That CI passes on GitHub
+- A real PMS/CRS integration
+- High availability of Redis or PostgreSQL
+- Compliance certification, a penetration test, achieved SLOs

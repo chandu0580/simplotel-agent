@@ -2,19 +2,20 @@
 
 A multi-tenant AI guest assistant for hotel websites. Guests ask about the property, rooms, amenities and policies, and check live availability, all in one conversation. Answers are grounded in each hotel's own knowledge base. Dates, capacity, inventory and prices are always computed by deterministic code, never by the model.
 
-The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation and container packaging. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
+The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation, shared state for multiple replicas and container packaging. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
 
 ## Status
 
 | | |
 |---|---|
-| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, offline fallback, AI traces, metrics, structured logs, rate limiting, admin RBAC boundary, i18n, Docker |
-| **Prototype** (in-memory, single process, or mock) | Conversation store, idempotency store, rate limiter, cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
-| **Designed / documented only** | OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, persistent database, dashboards and alerting |
-| **Verification (2026-09-16)** | Backend **203** tests · Frontend **13** · E2E **6** (desktop + mobile) · Offline eval **28/28** · Docker images built and run healthy |
-| **Live Anthropic API** | **Not verified.** No Anthropic credential was available. The Claude integration is tested with a fake client and with the real SDK against a mocked HTTP transport. AI-mode evals ran against a **GLM development provider** (33/34, 34/34, 32/34), which is **not** Claude verification. |
+| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, PII masking before the model, offline fallback, GLM and Anthropic provider adapters, AI traces, metrics, structured logs, rate limiting (memory or Redis), Redis-backed conversations, idempotency and locks, PostgreSQL schema with row-level security and audit sink, admin RBAC boundary, i18n, Docker (single instance and 3 replicas) |
+| **Prototype** (single process, per-process or mock) | In-memory state backend (the default), per-process knowledge and availability cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
+| **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
+| **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
+| **GLM (default provider)** | Development suite 34/34 in two runs and holdout suite 12/12 with the GLM-native adapter. This is evidence for the GLM runtime only, **not** Claude verification. |
+| **CI** | Workflows are defined; **neither has been run on GitHub**. |
 
-Details: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
+Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
 
 ## Features
 
@@ -22,7 +23,7 @@ Details: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
 - **Availability.** The model decides when to search or ask for details; code validates dates and computes capacity, inventory and price. Results render as room cards.
 - **Conversations.** History and booking context are kept on the server, so follow-ups like "what about 3 adults?" work. Conversations expire and guests can delete them.
 - **Graceful degradation.**
-  - If the model fails, a deterministic FAQ engine answers.
+  - If the model fails or times out, a deterministic FAQ engine answers and the turn reports `meta.degradation`.
   - If reservations are down, the guest gets a safe reply, and availability endpoints return 503.
   - Admin requests without configured auth get an honest 401.
 - **Multi-tenant.** Every request is scoped to a tenant and hotel. Two demo tenants (a Goa resort and a Bengaluru business hotel) prove isolation.
@@ -34,31 +35,43 @@ Details: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
 Browser (React + Vite)
    │  /api/v1/hotels/{hotel_id}/...
    ▼
-FastAPI  ── middleware: request/trace ids · security headers · rate limits · tenant resolution
+nginx ── static SPA · /api proxy · security headers · 64 KB body limit
+   ▼
+FastAPI  ── middleware: request/trace ids · security headers · body size · rate limits · tenant resolution
    │
-ConversationService ── server-side context, expiry, locking
+ConversationService ── server-side context, expiry, locks + compare-and-set versions
    │
-AssistantService ── input guardrails ─► AIAssistant (1 LLM call, 3 strict tools, output guardrails)
-   │                                   └► OfflineAssistant (deterministic fallback)
+AssistantService ── input guardrails + PII masking ─► AIAssistant (1 LLM call, 3 strict tools, output guardrails)
+   │                                                └► OfflineAssistant (deterministic fallback)
    ├─► ToolRegistry ─► ReservationProvider (resilient wrapper → mock inventory)
    ├─► KnowledgeProvider + Retriever (per-hotel JSON, content lifecycle)
-   └─► LLMProvider (Anthropic adapter) · ModelRouter
+   └─► LLMProvider (GLM adapter, default · Anthropic adapter · mock for load tests) · ModelRouter
+State: memory (one process) or Redis (conversations, rate limits, idempotency, locks) · PostgreSQL audit trail (optional)
 Cross-cutting: config & flags · structured logs · AI traces · Prometheus metrics · domain events
 ```
 
-Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md), [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md)
+Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md), [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) · Deployment: [DEPLOYMENT](docs/DEPLOYMENT.md)
 
 ## Quick start
 
-### Option A: Docker (one command)
+### Option A: Docker, single instance
 
 ```bash
 docker compose up --build        # http://localhost:8080
 ```
 
-Without an Anthropic key the assistant runs in offline FAQ mode. To enable AI, put `ANTHROPIC_API_KEY=...` in `backend/.env`; it is read at runtime and never baked into the image.
+Without `LLM_API_KEY` and `LLM_BASE_URL` the assistant runs in offline FAQ mode. To enable AI, put the provider settings (see [Environment](#environment)) in `backend/.env`; the file is read at runtime and never baked into the image.
 
-### Option B: Local development
+### Option B: Docker, three replicas with Redis and PostgreSQL
+
+```bash
+export SA_DB_OWNER_PASSWORD=...  SA_DB_APP_PASSWORD=...     # any local values; required, never commit them
+docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
+```
+
+This starts nginx, 3 backend replicas with `STATE_BACKEND=redis`, Redis, PostgreSQL and a one-shot migration job. The application connects to PostgreSQL as a non-superuser role so row-level security applies. Redis and PostgreSQL publish no host ports. It is a local rehearsal of the proposed topology, not a production deployment. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+### Option C: Local development
 
 Requirements: Python 3.11+ (developed on 3.13) and Node.js 20+ (developed on 22).
 
@@ -70,7 +83,7 @@ cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
-cp .env.example .env              # optional: add ANTHROPIC_API_KEY
+cp .env.example .env              # optional: add LLM_API_KEY and LLM_BASE_URL
 uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/docs
 
 # Frontend (second terminal)
@@ -83,16 +96,24 @@ To point the UI at the second demo hotel, run `VITE_HOTEL_ID=hotel-blr-001 npm r
 
 ## Environment
 
-All backend settings are documented in [backend/.env.example](backend/.env.example) and validated in `app/core/config.py`. The main ones:
+All backend settings are listed in [backend/.env.example](backend/.env.example), validated in `app/core/config.py` and documented in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The main ones:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Enables AI mode. Server-side only |
-| `APP_ENV` | `development` | `production` rejects dev auth, localhost/wildcard CORS, text logs and disabled rate limits |
-| `ANTHROPIC_MODEL` / `ANTHROPIC_EFFORT` | `claude-opus-5` / `low` | Model routing for guest turns |
+| `APP_ENV` | `development` | `production` rejects dev auth, localhost/wildcard CORS, text logs, disabled rate limits, `LLM_PROVIDER=mock` and non-HTTPS model endpoints |
+| `LLM_PROVIDER` | `glm` | `glm` (OpenAI-compatible Chat Completions, forced tool call) · `anthropic` (alternative adapter) · `mock` (fixed latency for load tests; rejected in production) · `none` |
+| `LLM_API_KEY` / `LLM_BASE_URL` | — | GLM credential and endpoint. Server-side only. `LLM_BASE_URL` must be `https://` in production |
+| `LLM_MODEL` / `LLM_MODEL_FAST` | `glm-5.2` / empty (= `LLM_MODEL`) | GLM model routing |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | —, —, `claude-opus-5`, `low` | Used only when `LLM_PROVIDER=anthropic`; `ANTHROPIC_BASE_URL` must be `https://` in production |
+| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `20` / `1` | Model call budget |
 | `AI_ENABLED` | `true` | Global kill switch (tenants can also disable AI via `ai_assistant_enabled`) |
+| `STATE_BACKEND` | `memory` | `memory` (one process) or `redis` (several replicas: conversations, rate limits, idempotency, locks) |
+| `REDIS_URL` / `REDIS_KEY_PREFIX` | — / `sa` | Required when `STATE_BACKEND=redis` |
+| `DATABASE_URL` | — | Optional PostgreSQL audit trail; connect as a non-superuser role so row-level security applies |
+| `WORKER_THREADS` | `150` | Request-handler threads; caps concurrent AI turns per process |
 | `AUTH_MODE` | `disabled` | Admin API auth; `static_token` is for development only |
-| `RATE_LIMIT_*` | 60/min IP · 20/min conversation · 1200/min hotel | In-process limiter |
+| `RATE_LIMIT_*` | IP burst 30 per 10 s · IP 60/min · tenant 3000/min · hotel 1200/min · conversation 20/min | Memory or Redis |
+| `PII_MASK_CONTACT_DETAILS` | `true` | Mask emails and phone numbers before the model; card numbers are always masked ([PRIVACY](docs/PRIVACY.md)) |
 | `FEATURE_*` | see `app/core/flags.py` | Global feature flags; per-tenant overrides live in `app/data/tenants.json` |
 
 Frontend: `VITE_HOTEL_ID` (default `hotel-goa-001`), `VITE_API_BASE_URL` (for builds served from another origin). There are no provider credentials in the frontend.
@@ -136,7 +157,7 @@ curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/
 }
 ```
 
-In AI mode, `mode` is `"ai"` and `meta` also carries `prompt_version` (e.g. `guest-assistant@4+…`) and `tool_schema_version`. `reply.type` is one of `answer`, `clarification`, `fallback`, `availability` or `collect_booking_details`.
+In AI mode, `mode` is `"ai"` and `meta` also carries `prompt_version` (e.g. `guest-assistant@4+…`) and `tool_schema_version`. When a turn is answered in degraded mode, `meta.degradation` is `{code, message}` (for example `LLM_TIMEOUT`); otherwise it is `null`. `reply.type` is one of `answer`, `clarification`, `fallback`, `availability` or `collect_booking_details`.
 
 ```bash
 # Booking-form search (deterministic, no LLM), recorded in the conversation's context
@@ -162,106 +183,144 @@ curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/
 | `POST .../conversations/{id}/messages` | Guest turn |
 | `POST .../conversations/{id}/availability` | Form search recorded in the conversation |
 | `POST /api/v1/hotels/{hotel_id}/availability` | Stateless availability search |
-| `GET /health` · `GET /ready` · `GET /metrics` | Liveness · readiness · Prometheus (internal only) |
+| `GET /health` · `GET /ready` · `GET /metrics` | Liveness · readiness · Prometheus (internal only; not reachable through nginx) |
 | `GET /api/v1/admin/tenants/{tenant_id}/hotels[/{hotel_id}/knowledge \| /ai-config]` | Admin, read-only, role- and tenant-scoped |
 | `/api/chat`, `/api/availability`, `/api/hotel`, `/api/health` | Original assignment endpoints for the default hotel; deprecated, still supported |
 
 ### Errors
 
+Every v1 error uses one envelope and never includes a stack trace:
+
 ```json
 {"error": {"code": "INVALID_BOOKING_DETAILS", "message": "Check-out date must be after the check-in date.", "request_id": "1b312934a28b407a", "details": null}}
 ```
 
-| Codes | Status |
+| Code | Status |
 |---|---|
 | `VALIDATION_ERROR`, `INVALID_BOOKING_DETAILS` | 422 |
-| `HOTEL_NOT_FOUND`, `CONVERSATION_NOT_FOUND` | 404 |
-| `RATE_LIMITED` | 429, with `Retry-After` |
-| `AVAILABILITY_UNAVAILABLE` | 503, with `Retry-After` |
-| `AUTH_NOT_CONFIGURED`, `AUTHENTICATION_REQUIRED` | 401 |
+| `PAYLOAD_TOO_LARGE` | 413 (body over 64 KB; also enforced by nginx) |
+| `METHOD_NOT_ALLOWED` | 405 |
+| `NOT_FOUND`, `HOTEL_NOT_FOUND`, `CONVERSATION_NOT_FOUND` | 404 |
+| `UNAUTHORIZED` | 401 (`details: [{"reason": "auth_not_configured"}]` when admin auth is disabled) |
 | `FORBIDDEN` | 403 |
-| `INTERNAL_ERROR` | 500; never includes stack traces |
+| `CONVERSATION_BUSY` | 409, `Retry-After: 2` |
+| `RATE_LIMITED` | 429, with `Retry-After` and `details[].dimension` |
+| `RESERVATION_UNAVAILABLE`, `KNOWLEDGE_UNAVAILABLE` | 503, `Retry-After: 30` |
+| `STATE_UNAVAILABLE` | 503, `Retry-After: 5` (Redis unreachable) |
+| `INTERNAL_ERROR` | 500 |
+| `LLM_TIMEOUT`, `LLM_UNAVAILABLE`, `TOOL_TIMEOUT`, `TOOL_UNAVAILABLE` | Not HTTP errors: reported in `meta.degradation` of a 200 turn |
+| `FEATURE_DISABLED`, `NOT_SUPPORTED`, `IDEMPOTENCY_CONFLICT` | Tool and reservation outcome codes |
 
-Legacy endpoints keep their original lowercase codes.
+The list is defined in `backend/app/core/errors.py`. Legacy endpoints keep their original lowercase codes.
 
 ## Testing
 
 ```bash
 cd backend
-python -m pytest                                  # 203 tests: unit, integration, contract, security
+python -m pytest                                  # unit, contract, security and API tests
 ruff check app tests evals scripts perf
-python -m evals.run_evals --mode offline --baseline evals/results/offline.json   # eval + regression gate
-python -m perf.benchmark                          # local overhead profile
+
+# Integration tests against real Redis and PostgreSQL (skipped when the variables are unset)
+TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
+TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres \
+python -m pytest tests/integration -rs
+
+# Evaluation (offline needs no model)
+python -m evals.run_evals --mode offline --baseline evals/results/offline.json   # regression gate (exit 3)
+python -m evals.run_evals --suite holdout --fail-on-critical                     # holdout suite; exit 4 on a critical failure
+python -m evals.run_evals --mode ai --label <label> --provider-note "..."        # live model from LLM_PROVIDER; costs tokens
+
+# Performance (local benchmark, not production capacity)
+python -m perf.benchmark                          # in-process overhead profile
+python -m perf.load_test                          # real HTTP load test; only ever uses LLM_PROVIDER=mock
+
+# Running stack checks (through nginx on :8080)
+python -m scripts.verify_stack                    # single instance
+python -m scripts.verify_stack --expect-shared-state   # 3-replica stack
+
+# Secret scan (reports file and pattern names only)
+python -m scripts.scan_secrets --git              # tracked files; also: PATH..., --tar image-fs.tar
 
 cd ../frontend
-npm test                                          # 13 component tests
+npm test                                          # component tests
 npm run build                                     # type check + build
-npx playwright install chromium && npm run test:e2e   # 6 E2E runs (real backend + frontend, desktop + mobile)
+npx playwright install chromium && npm run test:e2e   # E2E (real backend + frontend, desktop + mobile, AI disabled)
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus dependency audits and a Docker smoke test, with no secrets needed. Live AI evaluation is a separate manual workflow (`ai-eval.yml`) gated on an `ANTHROPIC_API_KEY` secret. **Neither workflow has been run on GitHub yet.**
+Totals from the latest run: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md). Load-test method and results: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+### CI
+
+- **`.github/workflows/ci.yml`** needs no LLM secret. Jobs: backend (ruff, pytest, offline eval gate, pip-audit); integration (Redis and PostgreSQL service containers, `tests/integration`); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, npm audit); e2e (Playwright); docker (build, non-root and image secret scan, single-instance `verify_stack`, 3-replica `verify_stack --expect-shared-state`, simultaneous booking probe across replicas, graceful stop).
+- **`.github/workflows/live-ai-eval.yml`** is manual (`workflow_dispatch`): provider `glm` or `anthropic`, secrets from the protected `ai-evaluation` environment, inputs sanitised, optional baseline gate, results uploaded as artifacts.
+
+**Neither workflow has been run on GitHub.**
 
 ## Evaluation
 
-34 scenarios covering functional, grounding, tool-calling, conversation, safety, prompt-injection and multi-tenant cases. Checks are structured wherever possible: which decision the model made, tool arguments, cited evidence, guardrails triggered, and whether the model was called at all.
+Two suites. The **development** suite (34 scenarios: functional, grounding, tool-calling, conversation, safety, prompt-injection and multi-tenant) was used while writing prompts and guardrails. The **holdout** suite (12 adversarial scenarios, 10 critical) was written afterwards and is never used for tuning. Checks are structured wherever possible: the decision the model made, tool arguments, cited evidence, guardrails triggered, and whether the model was called at all.
 
 | Run | Result |
 |---|---|
-| Offline | 28/28 (6 AI-only skipped); groundedness 15/15 |
-| GLM development provider (**not Claude**) | 33/34, 34/34, and 32/34 after review fixes (one plain-text-instead-of-tool fallback; one false-negative check since corrected); decision accuracy 18/18 in every run |
-| Anthropic live | **Not executed**, no credential |
+| Offline, development suite | 28/28 (6 AI-only skipped); critical 14/14; no regressions vs baseline |
+| Offline, holdout suite | 12/12; critical 10/10 |
+| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | 34/34 and 34/34; decision accuracy 18/18 in both |
+| GLM `glm-5.2`, GLM-native adapter, holdout suite (**GLM runtime only, not Claude**) | 12/12; critical 10/10; served by AI 12/12 |
+| Anthropic live | **NOT VERIFIED — no Anthropic credential** |
 
-Details and history: [docs/EVALUATION.md](docs/EVALUATION.md).
+Details, root-cause analysis and history: [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ## AI architecture in brief
 
 - **One model call per turn.** The model must reply through exactly one strict tool: `answer_guest`, `check_availability` or `request_booking_details`. Tool results go straight to the UI, so the model never restates prices or inventory. The answer is a tool, not a JSON output format, because a real development model stopped calling tools when both were enabled.
+- **Forced tool call on the default provider.** The GLM adapter uses OpenAI-compatible Chat Completions with `tool_choice="required"` and parallel tool calls disabled. Over the earlier Anthropic-format path GLM occasionally answered in plain text; forcing the tool call removed that failure mode.
 - **Grounding.** The system prompt holds the hotel's published knowledge (about 2.8k tokens for the demo hotel). Every factual answer must cite entry ids, which code validates.
 - **Versioned.** Prompt, tool-schema and knowledge versions are recorded in traces, API responses and eval results.
-- **Model-agnostic core.** The `LLMProvider` interface isolates SDK details, and `ModelRouter` selects a model per task.
+- **Model-agnostic core.** The `LLMProvider` interface isolates protocol details; provider-neutral contract tests run against the GLM, Anthropic and scripted providers, including a failure contract (timeout, 5xx, plain text instead of a tool call all degrade to a grounded offline answer).
 - **Why no vector database:** the content fits in the prompt, and retrieval would only add a way to miss evidence. The retrieval interface is ready for when content grows. See [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Security
 
-- **Credentials:** held only by the backend, read from the environment, and redacted in logs. None are in the frontend or container images (verified by scanning the exported image filesystems).
+- **Credentials:** held only by the backend, read from the environment, and redacted in logs. The secret scanner found none in tracked files, the frontend bundle or the backend image filesystem.
 - **Guardrails:**
   - Input: exfiltration attempts blocked before the model; injection attempts flagged and counted; prompt tags neutralised.
   - Output: secret/prompt leakage, uncited answers, unsupported prices and inventory claims.
   - Tools: the model can only request exposed read-only tools.
-- **Isolation:** tenant-scoped data access, with isolation tests.
+- **Privacy:** card numbers (Luhn-valid) are always masked, and emails and phone numbers by default, before text reaches the model, the stored transcript or traces. Names and addresses are not detected. See [docs/PRIVACY.md](docs/PRIVACY.md).
+- **Isolation:** tenant-scoped data access with isolation tests; PostgreSQL row-level security forced on every table and composite tenant keys, tested against a real database.
 - **Admin API:** refuses until real auth is configured; RBAC with tenant and hotel scoping.
-- **HTTP hygiene:** rate limits, CORS allow-list, security headers (API and nginx), production configuration validation.
+- **HTTP hygiene:** rate limits, CORS allow-list, 64 KB body limit, security headers from the API and nginx (CSP, Permissions-Policy and others; HSTS is not sent over plain HTTP), production configuration validation.
 - **Containers:** non-root, read-only filesystem, capabilities dropped, digest-pinned base images.
 
 Threats, residual risks and roadmap: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Observability
 
-Structured JSON logs carry request, trace, tenant, hotel, conversation and channel context. There is an `AITrace` per turn (model, versions, evidence, tool calls, guardrails, tokens, latency, fallback reason), Prometheus metrics with low-cardinality labels, and domain events that never include message text. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) and [docs/SRE.md](docs/SRE.md).
+Structured JSON logs carry request, trace, tenant, hotel, conversation and channel context. There is an `AITrace` per turn (model, versions, evidence, tool calls, guardrails, tokens, LLM/tool/app latency, PII masked, fallback reason), Prometheus metrics with low-cardinality labels, and domain events that never include message text. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) and [docs/SRE.md](docs/SRE.md).
 
 ## Multi-tenancy
 
-`app/data/tenants.json` maps tenants to hotels. Each hotel has its own `hotel.json` (profile, brand, languages, rooms, knowledge with lifecycle) and `inventory.json`. Requests resolve `hotel_id` to a `TenantContext`. Conversations, bookings and caches are keyed by tenant and hotel, so a conversation from one hotel is a 404 through another. Feature flags can be overridden per tenant.
+`app/data/tenants.json` maps tenants to hotels. Each hotel has its own `hotel.json` (profile, brand, languages, rooms, knowledge with lifecycle) and `inventory.json`. Requests resolve `hotel_id` to a `TenantContext`. Conversations, bookings and caches are keyed by tenant and hotel, so a conversation from one hotel is a 404 through another, on any replica. Feature flags can be overridden per tenant.
 
 ## Limitations
 
-- **Unverified:** the live Anthropic API has not been called, and the CI workflows have never run on GitHub.
-- **Mocked:** availability and bookings use a mock provider. There is no PMS integration or payment flow.
-- **Single process:** conversations, rate limits, idempotency, cache and locks are in memory. Multiple replicas need Redis or Postgres first.
+- **Unverified:** the live Anthropic API has not been called, and the CI workflows have never run on GitHub. GLM results do not verify Claude.
+- **Mocked:** availability and bookings use a mock provider. There is no PMS integration or payment flow ([RESERVATION_INTEGRATION](docs/RESERVATION_INTEGRATION.md)).
+- **Partly persistent:** with `STATE_BACKEND=redis`, conversations, rate limits, idempotency and locks are shared across replicas. PostgreSQL stores only the audit trail; the other tables exist as schema only. Knowledge and availability caches stay per process by design.
 - **Authentication:** admin authentication is not production-grade (development static tokens only); guest chat is unauthenticated by design.
 - **Offline mode is literal:** it matches keywords, answers in English only, and recognises ISO dates only.
 - **Hindi UI strings are a draft** that needs native review.
 - **Not wired up yet:** WhatsApp and voice have render adapters but no inbound channels; semantic retrieval isn't implemented.
-- **Unmeasured:** nothing has been load tested or deployed, and every SLO in the docs is a proposal.
+- **Unmeasured in production:** load tests are a local benchmark on one machine, not production capacity; nothing has been deployed, and every SLO in the docs is a proposal.
 
 ## Production roadmap
 
-1. **Persistent stores:** Postgres for tenants, knowledge, bookings and audit; Redis for conversations, rate limits and idempotency.
+1. **Remaining persistent stores:** PostgreSQL repositories for tenants, knowledge, bookings, conversations and messages (schema exists).
 2. **Authentication:** OIDC for admin and staff, and guest authentication for booking management.
 3. **Real reservation integration:** a PMS or channel-manager adapter behind `ReservationProvider`.
-4. **Live evaluation:** run the eval suite against Claude, and gate prompt and model changes on it.
+4. **Live evaluation:** run the eval suites against Claude when a credential is available, and gate prompt and model changes on them.
 5. **Observability stack:** OpenTelemetry export, dashboards and alerts; an LLM-judge groundedness check on sampled traffic.
-6. **Edge protection:** WAF and bot protection, per-tenant LLM budgets, PII redaction before model calls.
+6. **Edge protection:** WAF and bot protection, per-tenant LLM budgets.
 7. **Knowledge authoring:** an admin publishing workflow for knowledge content.
 8. **Channels:** WhatsApp and voice ingress.
 9. **Semantic retrieval**, once content outgrows the prompt.
@@ -277,14 +336,19 @@ Migration path and scaling stages: [docs/ENTERPRISE_ARCHITECTURE.md](docs/ENTERP
 | [DECISIONS](docs/DECISIONS.md) | Product, UX, AI and engineering decisions (incl. the assignment's questions) |
 | [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md) | Target architecture, tenancy, data model, scalability, migration |
 | [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) | Request lifecycles and failure paths (sequence diagrams) |
+| [CONFIGURATION](docs/CONFIGURATION.md) | Every setting, defaults and production validation |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | Single-instance and multi-replica stacks, migrations, verification |
+| [PERFORMANCE](docs/PERFORMANCE.md) | Local load-test method and results |
+| [PRIVACY](docs/PRIVACY.md) | PII masking, data minimisation, retention and deletion |
+| [RESERVATION_INTEGRATION](docs/RESERVATION_INTEGRATION.md) | Reservation boundary, resilience, idempotency, PMS integration path |
 | [THREAT_MODEL](docs/THREAT_MODEL.md) | Threats, mitigations, residual risk |
 | [SRE](docs/SRE.md) · [OBSERVABILITY](docs/OBSERVABILITY.md) | Proposed SLOs, runbooks, DR, dashboards, metric definitions |
 | [COST_MODEL](docs/COST_MODEL.md) | LLM cost drivers and levers |
-| [ENTERPRISE_READINESS](docs/ENTERPRISE_READINESS.md) | Capability-by-capability status |
+| [ENTERPRISE_READINESS](docs/ENTERPRISE_READINESS.md) | Capability-by-capability status and verification record |
 | [EVALUATION](docs/EVALUATION.md) | Test and eval results, current and historical |
 
 ## AI tools used
 
-- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): design, implementation, tests, reviews and documentation, including parallel sub-agents that drafted the design documents from the code. Every result quoted in this repository comes from commands that were actually run.
-- **GLM (`glm-5.2`, via an Anthropic-compatible gateway):** a development provider for running the AI-mode eval suite through the app's real model code path. It is not the production model, and those runs are not Claude verification.
-- **Claude API (`claude-opus-5`):** the runtime model the backend is built for. Not yet exercised live.
+- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): design, implementation, tests, reviews and documentation, including parallel sub-agents that drafted documents from the code. Every result quoted in this repository comes from commands that were actually run.
+- **GLM (`glm-5.2`):** the default runtime provider, called through the GLM-native adapter (OpenAI-compatible protocol). Earlier development runs used an Anthropic-compatible gateway. GLM results are GLM-runtime evidence only, not Claude verification.
+- **Claude API (`claude-opus-5`):** supported through the alternative Anthropic adapter (`LLM_PROVIDER=anthropic`). Not exercised live.

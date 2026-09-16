@@ -9,7 +9,7 @@ This repository started as a take-home assignment: build a full-stack AI hotel g
 | Guest-facing chat UI (React preferred) with clear messages, a loading state, error handling and follow-ups | `frontend/src/components/*`, `frontend/src/hooks/useChat.ts` |
 | A usable way to collect check-in, check-out and guest count | `frontend/src/components/AvailabilityForm.tsx` |
 | Clear availability results, responsive on desktop and mobile | `frontend/src/components/AvailabilityResults.tsx`, `index.css`; E2E runs on desktop and Pixel 7 |
-| Browser calls the backend, never the LLM; no keys in the frontend | `frontend/src/api/client.ts`; provider code only in `backend/app/llm/anthropic_provider.py` |
+| Browser calls the backend, never the LLM; no keys in the frontend | `frontend/src/api/client.ts`; provider code only in `backend/app/llm/` (`glm_provider.py`, the default, and `anthropic_provider.py`) |
 | API accepting guest questions and conversation context | `POST /api/chat` (original, still supported) and `POST /api/v1/hotels/{hotel_id}/conversations/{id}/messages` |
 | Answers from a hotel knowledge base (JSON or database) | `backend/app/data/hotels/hotel-goa-001/hotel.json`, `app/knowledge/` |
 | Detect availability requests and call a mock `checkAvailability` tool | `check_availability` tool (`app/tools/builtin.py`) → `app/reservations/` |
@@ -37,17 +37,18 @@ None of this was required by the assignment. It is a foundation, not a productio
 | Architecture | Modular monolith with interfaces and a composition root (`app/container.py`); the old single-module layout was split into `core/`, `tenancy`, `knowledge/`, `llm/`, `tools/`, `assistant/`, `conversations/`, `reservations/`, `auth/`, `channels/`, `api/` |
 | Multi-tenancy | Tenant registry, `TenantContext`, a second demo tenant and hotel, tenant-scoped repositories, per-tenant feature flags, hotel-local time zones, isolation tests |
 | Knowledge | `KnowledgeProvider`, content lifecycle (draft/published/archived, versions, effective dates), `Retriever`/`Evidence`, knowledge versioning |
-| AI | `LLMProvider` abstraction (Anthropic adapter plus scripted provider), `ModelRouter`, prompt and tool-schema versioning, AI traces |
+| AI | `LLMProvider` abstraction (GLM adapter as the default runtime provider, Anthropic adapter as the alternative, plus latency-mock and scripted providers), `ModelRouter`, prompt and tool-schema versioning, AI traces |
 | Tools | `ToolRegistry` with read-only/mutating policies, exposure control, roles, guest confirmation, idempotency keys, timeouts, audit; a mock `create_booking` for the mutation path |
 | Reservations | `ReservationProvider` boundary; resilience wrapper (timeout, read retries, circuit breaker, short-TTL cache); idempotency store |
-| Conversations | Server-side conversation service: context window, message cap, sliding expiry, deletion, concurrency lock |
+| Conversations | Server-side conversation service: context window, message cap, sliding expiry, deletion, turn locks and version compare-and-set |
+| Shared state and data | `STATE_BACKEND=redis` for conversations, rate limits, idempotency and locks across replicas; PostgreSQL schema with row-level security, migrations, audit sink and retention job (other repositories schema only) |
 | Guardrails | Input (exfiltration block, injection signals, prompt-tag neutralisation) and output (leaks, citations, fabricated prices, inventory claims) |
 | API | `/api/v1` hotel-scoped guest API, admin API behind an authorization boundary, stable error codes, `/health`, `/ready`, `/metrics`, OpenAPI snapshot contract test; legacy endpoints kept with deprecation headers |
 | Platform | Environment-aware config validation, feature flags, structured JSON logs with redaction, Prometheus metrics, domain events, rate limiting, caching |
 | Frontend | v1 conversations, i18n (English plus a draft Hindi), hotel branding, connection status, accessibility improvements |
-| Delivery | Dockerfiles (non-root, pinned digests, health checks), docker-compose, GitHub Actions CI plus a manual live-AI eval workflow (neither has been run on GitHub yet) |
-| Evaluation | Structured assertions (decision, tool arguments, guardrails, no-model-call), tags, quality metrics, baseline regression gate, prompt-injection and multi-tenant scenarios |
-| Documentation | ENTERPRISE_ARCHITECTURE, SYSTEM_DESIGN, THREAT_MODEL, SRE, OBSERVABILITY, COST_MODEL, ENTERPRISE_READINESS, this page |
+| Delivery | Dockerfiles (non-root, pinned digests, health checks), docker-compose (single instance, and a 3-replica stack with Redis and PostgreSQL), GitHub Actions CI plus a manual live-AI eval workflow (neither has been run on GitHub yet) |
+| Evaluation | Structured assertions (decision, tool arguments, guardrails, no-model-call), tags, quality metrics, baseline regression gate, critical-scenario gate, prompt-injection and multi-tenant scenarios, a 12-scenario adversarial holdout suite |
+| Documentation | ENTERPRISE_ARCHITECTURE, SYSTEM_DESIGN, THREAT_MODEL, SRE, OBSERVABILITY, COST_MODEL, ENTERPRISE_READINESS, [CONFIGURATION](CONFIGURATION.md), [DEPLOYMENT](DEPLOYMENT.md), [PERFORMANCE](PERFORMANCE.md), [PRIVACY](PRIVACY.md), [RESERVATION_INTEGRATION](RESERVATION_INTEGRATION.md), this page |
 
 ## 3. Backward compatibility
 
@@ -57,6 +58,6 @@ None of this was required by the assignment. It is a foundation, not a productio
 
 ## 4. Still not done, in either phase
 
-- The live Anthropic API has not been called; there was no credential. The development-provider runs used GLM and are not Claude verification.
-- There is no real PMS or booking integration, no persistent database, and no production authentication.
-- Nothing has been deployed, load tested or measured against SLOs.
+- Anthropic live API: NOT VERIFIED — no Anthropic credential. GLM (`glm-5.2`) is now the default runtime provider; its eval runs are GLM-runtime evidence only, not Claude verification.
+- There is no real PMS or booking integration and no production authentication. PostgreSQL stores only the audit trail; the other database repositories exist as schema only.
+- Nothing has been deployed or measured against SLOs. The only load test is a local single-machine benchmark, not production capacity.

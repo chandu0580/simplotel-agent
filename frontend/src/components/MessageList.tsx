@@ -13,9 +13,12 @@ const ERROR_KEYS: Record<ApiErrorKind, MessageKey> = {
   network: 'error.network',
   timeout: 'error.timeout',
   rate_limited: 'error.rateLimited',
+  busy: 'error.busy',
+  too_large: 'error.tooLarge',
   validation: 'error.server',
   not_found: 'error.server',
-  unavailable: 'error.server',
+  unavailable: 'error.unavailable',
+  unexpected: 'error.server',
   server: 'error.server',
 }
 

@@ -9,9 +9,9 @@ Context strategy:
 * Conversations expire after `ttl`; guests can delete theirs at any time.
 """
 
-from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-import threading
 import uuid
 
 from pydantic import ValidationError
@@ -21,7 +21,9 @@ from ..assistant.turn import TurnRequest
 from ..core.clock import Clock, local_today
 from ..core.errors import AppError, ErrorCode
 from ..core.events import DomainEvent, EventPublisher
+from ..core.locks import LockNotAcquired, LockStore, held
 from ..core.metrics import Metrics
+from ..core.observability import bind_context
 from ..knowledge.provider import KnowledgeProvider
 from ..reservations.availability import AvailabilityValidationError
 from ..reservations.models import AvailabilityQuery, ReservationError, ReservationErrorCode
@@ -31,13 +33,16 @@ from ..tenancy import TenantContext
 from ..tools.base import ToolContext
 from ..tools.builtin import record_availability_search
 from .models import Conversation, StoredMessage
-from .repository import ConversationRepository
+from .repository import ConversationConflict, ConversationRepository
+
+_BUSY = "This conversation is busy with another message. Please try again in a moment."
 
 
 class ConversationService:
     def __init__(
         self,
         repository: ConversationRepository,
+        locks: LockStore,
         assistant: AssistantService,
         knowledge: KnowledgeProvider,
         reservations: ReservationProvider,
@@ -48,8 +53,13 @@ class ConversationService:
         ttl_seconds: int,
         max_messages: int,
         context_window: int,
+        lock_lease_seconds: float = 120.0,
+        lock_wait_seconds: float = 30.0,
     ):
         self.repository = repository
+        self.locks = locks
+        self.lock_lease = lock_lease_seconds
+        self.lock_wait = lock_wait_seconds
         self.assistant = assistant
         self.knowledge = knowledge
         self.reservations = reservations
@@ -59,14 +69,20 @@ class ConversationService:
         self.ttl = timedelta(seconds=ttl_seconds)
         self.max_messages = max_messages
         self.context_window = context_window
-        # Two turns on one conversation must not overwrite each other's messages. In-process lock today;
-        # with a shared store, use optimistic concurrency (a version column) instead.
-        self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
-        self._locks_guard = threading.Lock()
 
-    def _lock_for(self, key: str) -> threading.Lock:
-        with self._locks_guard:
-            return self._locks[key]
+    @contextmanager
+    def _exclusive(self, ctx: TenantContext, conversation_id: str) -> Iterator[None]:
+        """Serialise turns on one conversation (across replicas with a shared LockStore).
+
+        The lock keeps concurrent turns from wasting model calls; the version check in `save` is what
+        guarantees no lost update if a lease expires mid-turn.
+        """
+        bind_context(conversation_id=conversation_id)
+        try:
+            with held(self.locks, f"conv:{ctx.tenant_id}:{ctx.hotel_id}:{conversation_id}", lease_seconds=self.lock_lease, wait_seconds=self.lock_wait):
+                yield
+        except LockNotAcquired as exc:
+            raise AppError(ErrorCode.CONVERSATION_BUSY, _BUSY, 409, headers={"Retry-After": "2"}) from exc
 
     def start(self, ctx: TenantContext, locale: str | None = None) -> Conversation:
         now = self.clock.now()
@@ -80,11 +96,13 @@ class ConversationService:
             updated_at=now,
             expires_at=now + self.ttl,
         )
-        self.repository.save(conversation)
+        self.repository.save(conversation, expected_version=None)
+        bind_context(conversation_id=conversation.id)
         self._event("ConversationStarted", ctx.with_conversation(conversation.id), {"locale": locale})
         return conversation
 
     def get(self, ctx: TenantContext, conversation_id: str) -> Conversation:
+        bind_context(conversation_id=conversation_id)
         conversation = self.repository.get(ctx.tenant_id, ctx.hotel_id, conversation_id)
         if conversation is None:
             raise AppError(ErrorCode.CONVERSATION_NOT_FOUND, "Conversation not found or expired.", 404)
@@ -93,12 +111,10 @@ class ConversationService:
     def delete(self, ctx: TenantContext, conversation_id: str) -> None:
         if not self.repository.delete(ctx.tenant_id, ctx.hotel_id, conversation_id):
             raise AppError(ErrorCode.CONVERSATION_NOT_FOUND, "Conversation not found or expired.", 404)
-        with self._locks_guard:
-            self._locks.pop(f"{ctx.tenant_id}:{ctx.hotel_id}:{conversation_id}", None)
         self._event("ConversationDeleted", ctx.with_conversation(conversation_id), {})
 
     def post_message(self, ctx: TenantContext, conversation_id: str, message: str, locale: str | None = None) -> tuple[Conversation, TurnOutcome]:
-        with self._lock_for(f"{ctx.tenant_id}:{ctx.hotel_id}:{conversation_id}"):
+        with self._exclusive(ctx, conversation_id):
             return self._post_message(ctx, conversation_id, message, locale)
 
     def _post_message(self, ctx: TenantContext, conversation_id: str, message: str, locale: str | None) -> tuple[Conversation, TurnOutcome]:
@@ -107,10 +123,10 @@ class ConversationService:
         if locale:
             conversation.locale = locale
         history = [ChatHistoryItem(role=m.role, content=m.content[:4000]) for m in conversation.messages[-self.context_window :]]
-        outcome = self.assistant.handle(
-            TurnRequest(tenant=ctx, message=message, history=history, booking_context=conversation.availability_context, locale=conversation.locale)
-        )
-        self._append(conversation, "user", message, None)
+        request = TurnRequest(tenant=ctx, message=message, history=history, booking_context=conversation.availability_context, locale=conversation.locale)
+        outcome = self.assistant.handle(request)
+        # handle() minimised request.message (app.core.privacy): store that, never the raw text.
+        self._append(conversation, "user", request.message, None)
         self._append(conversation, "assistant", outcome.reply.text, outcome.reply.type)
         self._update_context(conversation, outcome.reply)
         self._touch_and_save(conversation)
@@ -120,7 +136,7 @@ class ConversationService:
         """Deterministic search from the booking form (no LLM). Recorded in the conversation when one is given."""
         if conversation_id is None:
             return self._check_availability(ctx, None, query)
-        with self._lock_for(f"{ctx.tenant_id}:{ctx.hotel_id}:{conversation_id}"):  # same lock as chat turns
+        with self._exclusive(ctx, conversation_id):  # same lock as chat turns
             return self._check_availability(ctx, conversation_id, query)
 
     def _check_availability(self, ctx: TenantContext, conversation_id: str | None, query: AvailabilityQuery) -> AvailabilityResult:
@@ -137,7 +153,7 @@ class ConversationService:
         except ReservationError as exc:
             if exc.code != ReservationErrorCode.UNAVAILABLE:
                 raise  # non-transient: a bug or misconfiguration, surfaced as a 500
-            raise AppError(ErrorCode.AVAILABILITY_UNAVAILABLE, "Availability is temporarily unavailable. Please try again shortly.", 503, headers={"Retry-After": "30"}) from exc
+            raise AppError(ErrorCode.RESERVATION_UNAVAILABLE, "Availability is temporarily unavailable. Please try again shortly.", 503, headers={"Retry-After": "30"}) from exc
         record_availability_search(self.metrics, self.events, ToolContext(tenant=ctx, kb=kb, today=today), result, source="form")
         if conversation:
             summary = f"Check availability: {query.check_in} to {query.check_out}, {query.adults} adults, {query.children} children"
@@ -171,7 +187,13 @@ class ConversationService:
         now: datetime = self.clock.now()
         conversation.updated_at = now
         conversation.expires_at = now + self.ttl  # sliding expiry while the guest is active
-        self.repository.save(conversation)
+        expected = conversation.version
+        conversation.version += 1
+        try:
+            self.repository.save(conversation, expected_version=expected)
+        except ConversationConflict as exc:
+            self.metrics.conversation_conflicts_total.inc()
+            raise AppError(ErrorCode.CONVERSATION_BUSY, _BUSY, 409, headers={"Retry-After": "2"}) from exc
 
     def _event(self, name: str, ctx: TenantContext, data: dict) -> None:
         self.events.publish(DomainEvent(name=name, tenant_id=ctx.tenant_id, hotel_id=ctx.hotel_id, conversation_id=ctx.conversation_id, channel=ctx.channel, data=data))

@@ -1,0 +1,69 @@
+name: Live AI evaluation
+
+# Manual only. Calls a real model and costs tokens. Secrets live in the protected "ai-evaluation"
+# environment (add required reviewers there). The standard CI workflow never needs any of them.
+#   glm:       LLM_API_KEY, LLM_BASE_URL (must be https://)   model default glm-5.2
+#   anthropic: ANTHROPIC_API_KEY                              model default claude-opus-5
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider adapter
+        type: choice
+        options: [glm, anthropic]
+        default: glm
+      model:
+        description: Model id (blank = provider default)
+        default: ""
+      gate:
+        description: Fail if a scenario that passed in the committed baseline now fails
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-ai-eval
+  cancel-in-progress: false
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ai-evaluation
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
+      - name: Run scenarios against the live model
+        env:
+          APP_ENV: test
+          LOG_LEVEL: ERROR
+          LLM_PROVIDER: ${{ inputs.provider }}
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_GATE: ${{ inputs.gate }}
+          LLM_API_KEY: ${{ inputs.provider == 'glm' && secrets.LLM_API_KEY || '' }}
+          LLM_BASE_URL: ${{ inputs.provider == 'glm' && secrets.LLM_BASE_URL || '' }}
+          ANTHROPIC_API_KEY: ${{ inputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+        # Inputs arrive via env and are sanitised in the shell, never interpolated into the script (prevents injection).
+        run: |
+          model=$(printf '%s' "$INPUT_MODEL" | tr -cd 'A-Za-z0-9._-')
+          if [ -n "$model" ]; then
+            if [ "$LLM_PROVIDER" = anthropic ]; then export ANTHROPIC_MODEL="$model"; else export LLM_MODEL="$model"; fi
+          fi
+          label="live-${LLM_PROVIDER}-${model:-default}-${GITHUB_RUN_ID}"
+          baseline=()
+          if [ "$INPUT_GATE" = true ] && [ -f "evals/results/live-${LLM_PROVIDER}-baseline.json" ]; then baseline=(--baseline "evals/results/live-${LLM_PROVIDER}-baseline.json"); fi
+          python -m evals.run_evals --mode ai --label "$label" \
+            --provider-note "Live run in GitHub Actions: provider=${LLM_PROVIDER} model=${model:-default}. Evidence for this provider only." "${baseline[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-ai-eval-results
+          path: backend/evals/results/live-*

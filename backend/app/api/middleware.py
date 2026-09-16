@@ -12,6 +12,7 @@ from ..core.observability import bind_context, log_event, reset_context
 from .errors import error_response
 
 logger = logging.getLogger("hotel_assistant.api")
+MAX_BODY_BYTES = 64 * 1024
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
 _TRACEPARENT = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$")
 
@@ -29,8 +30,16 @@ def install_middleware(app: FastAPI) -> None:
         bind_context(request_id=request_id, trace_id=trace_id)
 
         started = time.perf_counter()
+        declared = request.headers.get("content-length")
         try:
-            response = await call_next(request)
+            too_large = declared is not None and int(declared) > MAX_BODY_BYTES
+        except ValueError:
+            too_large = True
+        try:
+            if too_large:
+                response = error_response(request, 413, ErrorCode.PAYLOAD_TOO_LARGE, f"Request body exceeds {MAX_BODY_BYTES // 1024} KB.")
+            else:
+                response = await call_next(request)
         except Exception:
             logger.exception("unhandled_error path=%s", request.url.path)
             response = error_response(request, 500, ErrorCode.INTERNAL_ERROR, "Something went wrong on our side. Please try again.")

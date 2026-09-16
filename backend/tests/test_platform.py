@@ -31,7 +31,7 @@ def test_health_and_readiness(offline_client):
     assert offline_client.get("/health").json() == {"status": "ok"}
     ready = offline_client.get("/ready")
     assert ready.status_code == 200
-    assert ready.json()["checks"] == {"knowledge": "ok", "reservations": "ok", "llm": "not_configured"}
+    assert ready.json()["checks"] == {"knowledge": "ok", "state": "ok", "reservations": "ok", "llm": "not_configured", "audit_store": "not_configured"}
 
 
 def test_reservation_outage_degrades_but_keeps_instance_ready():
@@ -158,7 +158,8 @@ def test_openapi_documents_v1(offline_client):
 
 def test_admin_api_refuses_when_auth_is_not_configured(offline_client):
     response = offline_client.get("/api/v1/admin/tenants/tenant-demo/hotels")
-    assert response.status_code == 401 and response.json()["error"]["code"] == "AUTH_NOT_CONFIGURED"
+    body = response.json()
+    assert response.status_code == 401 and body["error"]["code"] == "UNAUTHORIZED" and body["error"]["details"] == [{"reason": "auth_not_configured"}]
 
 
 @pytest.mark.parametrize(

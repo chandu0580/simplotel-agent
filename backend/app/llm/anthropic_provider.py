@@ -34,9 +34,8 @@ class AnthropicProvider:
         self.refusal_fallback = refusal_fallback
 
     @classmethod
-    def from_settings(cls, api_key: str, timeout: float, max_retries: int, refusal_fallback: str) -> "AnthropicProvider":
-        # ANTHROPIC_BASE_URL is honoured by the SDK, so an Anthropic-compatible gateway works without code changes.
-        client = anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=max_retries)
+    def from_settings(cls, api_key: str, timeout: float, max_retries: int, refusal_fallback: str, base_url: str | None = None) -> "AnthropicProvider":
+        client = anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=max_retries, base_url=base_url)
         return cls(client.beta.messages, refusal_fallback)
 
     def _kwargs(self, request: LLMRequest) -> dict[str, Any]:
@@ -66,7 +65,9 @@ class AnthropicProvider:
             response = self.messages.create(**self._kwargs(request))
         except anthropic.APIStatusError as exc:
             raise LLMProviderError("status", f"Anthropic API error {exc.status_code}: {exc.message}", exc.status_code) from exc
-        except anthropic.APIConnectionError as exc:  # includes timeouts
+        except anthropic.APITimeoutError as exc:
+            raise LLMProviderError("timeout", "Anthropic API request timed out") from exc
+        except anthropic.APIConnectionError as exc:
             raise LLMProviderError("connection", f"Anthropic API unreachable: {type(exc).__name__}") from exc
         except anthropic.AnthropicError as exc:  # e.g. unparseable response
             raise LLMProviderError("sdk", f"Anthropic SDK error: {type(exc).__name__}") from exc

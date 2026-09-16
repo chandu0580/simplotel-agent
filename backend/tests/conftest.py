@@ -64,6 +64,8 @@ class FakeMessages:
 
 def make_container(messages_client: Any | None = None, **settings_overrides) -> Container:
     provider = AnthropicProvider(messages_client) if messages_client is not None else None
+    if provider is not None:  # the fake client speaks the Anthropic protocol
+        settings_overrides = {"llm_provider": "anthropic", "model_primary": "claude-opus-5", "model_fast": "claude-opus-5", **settings_overrides}
     return build_container(Settings.for_tests(**settings_overrides), clock=FixedClock(TODAY), llm_provider=provider)
 
 

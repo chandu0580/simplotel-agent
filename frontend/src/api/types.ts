@@ -52,8 +52,15 @@ export interface ChatReply {
   form_error: string | null
 }
 
+export interface Degradation {
+  /** LLM_TIMEOUT | LLM_UNAVAILABLE | TOOL_TIMEOUT | TOOL_UNAVAILABLE | RESERVATION_UNAVAILABLE */
+  code: string
+  message: string
+}
+
 export interface ResponseMeta {
   trace_id: string
+  degradation?: Degradation | null
   prompt_version: string | null
   tool_schema_version: string | null
   knowledge_version: string | null

@@ -45,6 +45,7 @@ class AITrace:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     guardrails: list[str] = field(default_factory=list)
     input_flags: list[str] = field(default_factory=list)
+    pii_masked: list[str] = field(default_factory=list)  # kinds masked in the guest message (card, email, phone)
     stop_reason: str | None = None
     llm_latency_ms: int | None = None
     input_tokens: int | None = None
@@ -58,6 +59,12 @@ class AITrace:
     success: bool = False
     error_type: str | None = None
     total_latency_ms: int | None = None
+    # Latency breakdown (ms, sub-millisecond precision). app = total - llm - tools: prompt build,
+    # guardrails, validation, knowledge snapshot and retrieval, i.e. everything this service controls.
+    knowledge_latency_ms: float | None = None
+    retrieval_latency_ms: float | None = None
+    tool_latency_ms: float | None = None
+    app_latency_ms: float | None = None
 
 
 class TraceSink(Protocol):

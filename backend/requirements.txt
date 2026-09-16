@@ -6,3 +6,8 @@ anthropic==1.6.0
 python-dotenv==1.2.3
 prometheus-client==0.23.1
 tzdata==2026.4
+httpx==0.28.1
+# Optional shared state (STATE_BACKEND=redis) and PostgreSQL audit store (DATABASE_URL); imported only when configured.
+redis==5.2.1
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4

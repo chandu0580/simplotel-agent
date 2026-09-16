@@ -5,19 +5,21 @@ OpenTelemetry trace sink) means changing this file, not the assistant or the API
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from .assistant.agent import AIAssistant
 from .assistant.guardrails import InputGuardrails, OutputGuardrails
 from .assistant.offline import OfflineAssistant
 from .assistant.service import AssistantService
 from .auth.providers import AuthProvider, DisabledAuthProvider, StaticTokenAuthProvider
-from .conversations.repository import InMemoryConversationRepository
+from .conversations.repository import ConversationRepository, InMemoryConversationRepository
 from .conversations.service import ConversationService
 from .core.cache import TTLCache
 from .core.clock import Clock, SystemClock
 from .core.config import ConfigError, Settings
 from .core.events import CompositeEventPublisher, EventPublisher, InMemoryEventPublisher, LoggingEventPublisher
 from .core.flags import FeatureFlags
+from .core.locks import InMemoryLockStore, LockStore
 from .core.metrics import Metrics
 from .core.observability import Redactor
 from .core.rate_limit import InMemorySlidingWindowRateLimiter, RateLimiter
@@ -26,13 +28,59 @@ from .core.tracing import CompositeTraceSink, InMemoryTraceSink, LoggingTraceSin
 from .knowledge.provider import JsonKnowledgeProvider, KnowledgeProvider
 from .knowledge.retrieval import FullContextRetriever, KeywordRetriever
 from .llm.anthropic_provider import AnthropicProvider
+from .llm.glm_provider import GLMProvider
+from .llm.mock_provider import LatencyMockProvider
 from .llm.provider import LLMProvider
 from .llm.router import ModelRouter
-from .reservations.idempotency import InMemoryIdempotencyStore
+from .reservations.idempotency import IdempotencyStore, InMemoryIdempotencyStore
 from .reservations.provider import MockReservationProvider, ReservationProvider, ResilientReservationProvider
 from .tenancy import TenantRegistry
 from .tools.base import ToolRegistry
 from .tools.builtin import CheckAvailabilityTool, CreateBookingTool, RequestBookingDetailsTool
+
+
+@dataclass
+class StateStores:
+    conversations: ConversationRepository
+    locks: LockStore
+    rate_limiter: RateLimiter
+    idempotency: IdempotencyStore
+    redis: Any = None
+
+
+def build_state(settings: Settings, clock: Clock, metrics: Metrics) -> StateStores:
+    if settings.state_backend == "redis":
+        from .state import redis_backend as rb  # imported only when selected
+
+        client = rb.connect(settings.redis_url)  # type: ignore[arg-type]
+        prefix = settings.redis_key_prefix
+        return StateStores(
+            conversations=rb.RedisConversationRepository(client, prefix, clock),
+            locks=rb.RedisLockStore(client, prefix),
+            rate_limiter=rb.RedisSlidingWindowRateLimiter(client, prefix, on_error=lambda: metrics.state_backend_errors_total.labels("rate_limiter").inc()),
+            idempotency=rb.RedisIdempotencyStore(client, prefix),
+            redis=client,
+        )
+    return StateStores(
+        conversations=InMemoryConversationRepository(clock, settings.conversation_max_active),
+        locks=InMemoryLockStore(),
+        rate_limiter=InMemorySlidingWindowRateLimiter(),
+        idempotency=InMemoryIdempotencyStore(),
+    )
+
+
+def build_llm_provider(settings: Settings) -> LLMProvider:
+    if settings.llm_provider == "glm":
+        return GLMProvider(
+            settings.llm_base_url or "", settings.llm_api_key or "", timeout_seconds=settings.llm_timeout_seconds, max_retries=settings.llm_max_retries
+        )
+    if settings.llm_provider == "anthropic":
+        return AnthropicProvider.from_settings(
+            settings.anthropic_api_key or "", settings.llm_timeout_seconds, settings.llm_max_retries, settings.refusal_fallback, settings.anthropic_base_url
+        )
+    if settings.llm_provider == "mock":
+        return LatencyMockProvider(settings.mock_llm_latency_ms)
+    raise ConfigError(f"No LLM provider for LLM_PROVIDER={settings.llm_provider}")
 
 
 @dataclass
@@ -56,6 +104,18 @@ class Container:
     rate_limiter: RateLimiter
     auth: AuthProvider
     redactor: Redactor
+    state: StateStores
+    audit: Any = None  # PostgresAuditSink when DATABASE_URL is set
+
+    def close(self) -> None:
+        """Graceful shutdown: flush audit events, close pools and clients."""
+        if self.audit is not None:
+            self.audit.close()
+        closer = getattr(self.llm_provider, "close", None)
+        if callable(closer):
+            closer()
+        if self.state.redis is not None:
+            self.state.redis.close()
 
 
 def build_container(
@@ -72,8 +132,14 @@ def build_container(
         raise ConfigError("semantic_retrieval_enabled is set, but no semantic retriever is implemented in this build")
 
     metrics = Metrics()
+    state = build_state(settings, clock, metrics)
+    audit = None
+    if settings.database_url:
+        from .db.audit import PostgresAuditSink  # imported only when configured
+
+        audit = PostgresAuditSink(settings.database_url, metrics)
     recent_events = InMemoryEventPublisher(maxlen=500)
-    events = CompositeEventPublisher(LoggingEventPublisher(), recent_events)
+    events = CompositeEventPublisher(LoggingEventPublisher(), recent_events, *([audit] if audit else []))
     recent_traces = InMemoryTraceSink(maxlen=500)
     sinks: list[TraceSink] = [LoggingTraceSink(), recent_traces] + ([extra_trace_sink] if extra_trace_sink else [])
     traces = CompositeTraceSink(*sinks)
@@ -85,7 +151,9 @@ def build_container(
         if tenant.feature_flags.get("semantic_retrieval_enabled"):
             raise ConfigError(f"Tenant {tenant.id} enables semantic_retrieval_enabled, but no semantic retriever is implemented in this build")
     knowledge = JsonKnowledgeProvider(settings.data_dir, cache, settings.knowledge_cache_ttl_seconds)
-    inner_reservations = reservation_provider or MockReservationProvider(settings.data_dir, InMemoryIdempotencyStore())
+    if audit is not None:
+        audit.sync_tenants(tenants, knowledge)
+    inner_reservations = reservation_provider or MockReservationProvider(settings.data_dir, state.idempotency)
     reservations = ResilientReservationProvider(
         inner_reservations,
         CircuitBreaker(f"reservations:{inner_reservations.name}", settings.circuit_breaker_failures, settings.circuit_breaker_reset_seconds),
@@ -105,9 +173,7 @@ def build_container(
     redactor = Redactor(settings.secret_values())
 
     if llm_provider is None and settings.llm_configured:
-        llm_provider = AnthropicProvider.from_settings(
-            settings.anthropic_api_key or "", settings.llm_timeout_seconds, settings.llm_max_retries, settings.refusal_fallback
-        )
+        llm_provider = build_llm_provider(settings)
     ai = (
         AIAssistant(
             llm_provider,
@@ -121,9 +187,12 @@ def build_container(
         else None
     )
     offline = OfflineAssistant(tools, KeywordRetriever())
-    assistant = AssistantService(tenants, knowledge, ai, offline, InputGuardrails(), flags, metrics, events, traces, clock)
+    assistant = AssistantService(
+        tenants, knowledge, ai, offline, InputGuardrails(), flags, metrics, events, traces, clock, mask_contact_details=settings.pii_mask_contact_details
+    )
     conversations = ConversationService(
-        InMemoryConversationRepository(clock, settings.conversation_max_active),
+        state.conversations,
+        state.locks,
         assistant,
         knowledge,
         reservations,
@@ -133,6 +202,8 @@ def build_container(
         ttl_seconds=settings.conversation_ttl_seconds,
         max_messages=settings.conversation_max_messages,
         context_window=settings.conversation_context_window,
+        lock_lease_seconds=settings.conversation_lock_lease_seconds,
+        lock_wait_seconds=settings.conversation_lock_wait_seconds,
     )
     auth: AuthProvider = StaticTokenAuthProvider(settings.admin_api_tokens) if settings.auth_mode == "static_token" else DisabledAuthProvider()
 
@@ -153,7 +224,9 @@ def build_container(
         llm_provider=llm_provider,
         assistant=assistant,
         conversations=conversations,
-        rate_limiter=InMemorySlidingWindowRateLimiter(),
+        rate_limiter=state.rate_limiter,
         auth=auth,
         redactor=redactor,
+        state=state,
+        audit=audit,
     )

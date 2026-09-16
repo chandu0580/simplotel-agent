@@ -47,8 +47,16 @@ def retry(
     retry_on: tuple[type[BaseException], ...],
     base_delay: float = 0.1,
     max_delay: float = 2.0,
+    deadline_seconds: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> T:
+    """Retry `fn` on `retry_on` errors with jittered backoff.
+
+    `deadline_seconds` bounds the whole sequence: no new attempt starts once the budget is spent,
+    so retries can never outlast the caller's own timeout.
+    """
+    started = clock()
     last: BaseException | None = None
     for attempt in range(attempts):
         try:
@@ -57,21 +65,43 @@ def retry(
             last = exc
             if attempt == attempts - 1:
                 break
-            sleep(min(max_delay, base_delay * (2**attempt)) * (0.5 + random.random() / 2))  # noqa: S311 - jitter, not cryptography
+            delay = min(max_delay, base_delay * (2**attempt)) * (0.5 + random.random() / 2)  # noqa: S311 - jitter, not cryptography
+            if deadline_seconds is not None and clock() - started + delay >= deadline_seconds:
+                break
+            sleep(delay)
     assert last is not None
     raise last
 
 
 class CircuitBreaker:
-    """Closed → (N consecutive failures) → open → (reset timeout) → half-open → one trial call."""
+    """CLOSED → (N consecutive dependency failures) → OPEN → (cooldown) → HALF_OPEN → one trial call.
 
-    def __init__(self, name: str, failure_threshold: int, reset_timeout_seconds: float, clock: Callable[[], float] = time.monotonic):
+    * In HALF_OPEN exactly one caller gets the trial permit; concurrent callers fail fast with
+      CircuitOpenError instead of piling onto a dependency that may still be down.
+    * Trial success → CLOSED (counters reset). Trial failure → OPEN again for a full cooldown.
+    * Only exceptions classified by `is_failure` count; callers shield guest-input/business errors
+      (see ResilientReservationProvider) so validation problems never trip the breaker.
+
+    State is per process. With several replicas each keeps its own view, which only delays how
+    quickly every replica notices an outage; it never lets a failing dependency be hammered.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        failure_threshold: int,
+        reset_timeout_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+        is_failure: Callable[[BaseException], bool] = lambda exc: True,
+    ):
         self.name = name
         self.failure_threshold = failure_threshold
         self.reset_timeout = reset_timeout_seconds
         self._clock = clock
+        self._is_failure = is_failure
         self._failures = 0
         self._opened_at: float | None = None
+        self._probe_in_flight = False
         self._lock = threading.Lock()
 
     @property
@@ -88,17 +118,28 @@ class CircuitBreaker:
 
     def call(self, fn: Callable[[], T]) -> T:
         with self._lock:
-            if self._state_locked() == "open":
-                raise CircuitOpenError(f"circuit '{self.name}' is open")
+            state = self._state_locked()
+            if state == "open" or (state == "half_open" and self._probe_in_flight):
+                raise CircuitOpenError(f"circuit '{self.name}' is {state}")
+            is_probe = state == "half_open"
+            if is_probe:
+                self._probe_in_flight = True
         try:
             result = fn()
-        except Exception:
+        except BaseException as exc:
             with self._lock:
-                self._failures += 1
-                if self._failures >= self.failure_threshold or self._opened_at is not None:
-                    self._opened_at = self._clock()
+                if is_probe:
+                    self._probe_in_flight = False
+                if self._is_failure(exc):
+                    self._failures += 1
+                    if is_probe or self._failures >= self.failure_threshold:
+                        self._opened_at = self._clock()
+                elif is_probe:
+                    self._opened_at = None  # the dependency answered; the error was not its fault
+                    self._failures = 0
             raise
         with self._lock:
             self._failures = 0
             self._opened_at = None
+            self._probe_in_flight = False
         return result

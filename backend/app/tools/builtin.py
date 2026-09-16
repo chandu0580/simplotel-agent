@@ -82,7 +82,7 @@ class CheckAvailabilityTool:
             "additionalProperties": False,
         },
         policy=ToolPolicy.READ_ONLY,
-        timeout_seconds=15.0,
+        timeout_seconds=20.0,  # above ResilientReservationProvider's retry deadline (16 s with defaults)
     )
 
     def __init__(self, reservations: ReservationProvider, metrics: Metrics, events: EventPublisher):
@@ -203,7 +203,17 @@ class CreateBookingTool:
         except ReservationError as exc:
             code = ToolErrorCode.DEPENDENCY_UNAVAILABLE if exc.code == ReservationErrorCode.UNAVAILABLE else ToolErrorCode.BUSINESS_RULE
             raise ToolExecutionError(code, exc.message) from exc
+        # Deterministic id: idempotent replays (on any replica) re-announce the same event, which the audit
+        # store's primary key deduplicates, so one booking has exactly one durable confirmation.
         self.events.publish(
-            DomainEvent(name="BookingConfirmed", tenant_id=ctx.tenant.tenant_id, hotel_id=ctx.tenant.hotel_id, conversation_id=ctx.tenant.conversation_id, channel=ctx.tenant.channel, data={"booking_id": booking.booking_id})
+            DomainEvent(
+                event_id=f"booking-confirmed-{booking.booking_id}",
+                name="BookingConfirmed",
+                tenant_id=ctx.tenant.tenant_id,
+                hotel_id=ctx.tenant.hotel_id,
+                conversation_id=ctx.tenant.conversation_id,
+                channel=ctx.tenant.channel,
+                data={"booking_id": booking.booking_id},
+            )
         )
         return booking

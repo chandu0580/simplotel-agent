@@ -57,9 +57,30 @@ def _scripted_provider():
     return provider, provider.requests
 
 
-@pytest.fixture(params=["anthropic", "scripted"])
+def _glm_provider(status=200, body=None):
+    import httpx
+
+    from app.llm.glm_provider import GLMProvider
+
+    body = body or {
+        "id": "chatcmpl-1", "model": "glm-5.2",
+        "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": None,
+                     "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "check_availability", "arguments": "{\"adults\": 2}"}}]}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 0}},
+    }
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(status, json=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return GLMProvider("https://gateway.example/v1", "test-key", timeout_seconds=5, max_retries=0, client=client, sleep=lambda _s: None), sent
+
+
+@pytest.fixture(params=["anthropic", "glm", "scripted"])
 def llm(request):
-    return _anthropic_provider() if request.param == "anthropic" else _scripted_provider()
+    return {"anthropic": _anthropic_provider, "glm": _glm_provider, "scripted": _scripted_provider}[request.param]()
 
 
 def test_llm_provider_contract_tool_calls(llm):
@@ -67,7 +88,7 @@ def test_llm_provider_contract_tool_calls(llm):
     response = provider.generate_with_tools(REQUEST)
     assert response.stop_reason == "tool_use"
     assert response.tool_calls == [ToolCall("toolu_1", "check_availability", {"adults": 2})]
-    assert response.usage.input_tokens == 5 and response.model == "claude-opus-5"
+    assert response.usage.input_tokens == 5 and response.model and response.provider == provider.name
 
 
 def test_llm_provider_contract_generate_sends_no_tools(llm):
@@ -86,9 +107,13 @@ def test_anthropic_errors_map_to_provider_errors():
 
 
 def test_model_router_routes_every_task():
-    router = ModelRouter.from_settings(make_container().settings)
-    assert router.route(ModelTask.GUEST_TURN).model == "claude-opus-5"
-    assert set(router.describe()) == {t.value for t in ModelTask}
+    from app.core.config import Settings
+
+    glm = ModelRouter.from_settings(Settings.for_tests(llm_provider="glm"))
+    anthropic_router = ModelRouter.from_settings(Settings.for_tests(llm_provider="anthropic", model_primary="claude-opus-5", model_fast="claude-opus-5"))
+    assert glm.route(ModelTask.GUEST_TURN).model == "glm-5.2" and glm.route(ModelTask.GUEST_TURN).effort is None  # effort is Anthropic-only
+    assert anthropic_router.route(ModelTask.GUEST_TURN).model == "claude-opus-5" and anthropic_router.route(ModelTask.GUEST_TURN).effort == "low"
+    assert set(glm.describe()) == {t.value for t in ModelTask}
     with pytest.raises(ValueError):
         ModelRouter({ModelTask.GUEST_TURN: ModelRoute("m", None, 1)})
 
@@ -164,3 +189,193 @@ def test_token_usage_includes_cache_reads_and_writes():
     )
     usage = provider.generate(REQUEST).usage
     assert (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens) == (50, 10, 2800, 120)
+
+
+# ---------- GLM adapter specifics ----------
+
+
+def test_glm_request_forces_a_single_tool_call_and_omits_anthropic_parameters():
+    from dataclasses import replace
+
+    provider, sent = _glm_provider()
+    provider.generate_with_tools(replace(REQUEST, require_tool=True))
+    body = sent[0]
+    assert body["tool_choice"] == "required" and body["parallel_tool_calls"] is False
+    assert body["messages"][0] == {"role": "system", "content": "You are a test."}
+    assert body["tools"][0]["function"]["name"] == "check_availability"
+    assert "effort" not in json.dumps(body) and "fallbacks" not in body and "output_config" not in body
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "kind"),
+    [(500, {"error": "boom"}, "status"), (401, {"error": "bad key"}, "status"), (200, {"no": "choices"}, "protocol")],
+)
+def test_glm_errors_map_to_typed_provider_errors(status, body, kind):
+    provider, _ = _glm_provider(status=status, body=body)
+    with pytest.raises(LLMProviderError) as exc:
+        provider.generate_with_tools(REQUEST)
+    assert exc.value.kind == kind
+
+
+def test_glm_retries_transient_errors_but_not_client_errors():
+    import httpx
+
+    from app.llm.glm_provider import GLMProvider
+
+    ok = {"model": "glm-5.2", "choices": [{"finish_reason": "stop", "message": {"content": "hi"}}], "usage": {}}
+    for status, expected_calls in ((503, 3), (400, 1)):
+        calls = []
+
+        def handler(request, status=status, calls=calls):
+            calls.append(1)
+            return httpx.Response(status if len(calls) < 3 else 200, json=ok if len(calls) >= 3 else {"error": "x"})
+
+        provider = GLMProvider("https://g.example/v1", "k", timeout_seconds=5, max_retries=2, client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _s: None)
+        try:
+            provider.generate(REQUEST)
+        except LLMProviderError:
+            pass
+        assert len(calls) == expected_calls
+
+
+def test_glm_malformed_tool_arguments_are_rejected_by_the_assistant():
+    """Malformed JSON arguments reach the assistant as a raw string and are treated as invalid output → offline fallback."""
+    import httpx
+
+    from app.container import build_container
+    from app.core.clock import FixedClock
+    from app.core.config import Settings
+    from app.llm.glm_provider import GLMProvider
+    from tests.conftest import TODAY, turn_request
+
+    body = {"model": "glm-5.2", "choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "answer_guest", "arguments": "{not json"}}]}}]}
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)))
+    provider = GLMProvider("https://g.example/v1", "k", timeout_seconds=5, max_retries=0, client=client)
+    container = build_container(Settings.for_tests(llm_provider="glm"), clock=FixedClock(TODAY), llm_provider=provider)
+
+    outcome = container.assistant.handle(turn_request(container, "What time is check-in?"))
+
+    assert outcome.mode == "offline" and outcome.trace.fallback_reason == "invalid_output"
+    assert outcome.reply.sources[0].id == "timings.check_in_out"
+
+
+def test_glm_timeout_abandons_the_request_within_the_budget():
+    """Against a real slow HTTP server: the client read timeout closes the connection, so no work is left hanging."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    import time
+
+    from app.llm.glm_provider import GLMProvider
+
+    finished = []
+
+    class Slow(BaseHTTPRequestHandler):
+        def do_POST(self):
+            time.sleep(2)
+            try:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+            except OSError:
+                pass
+            finished.append(1)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        provider = GLMProvider(f"http://127.0.0.1:{server.server_address[1]}/v1", "k", timeout_seconds=0.3, max_retries=0)
+        started = time.perf_counter()
+        with pytest.raises(LLMProviderError) as exc:
+            provider.generate(REQUEST)
+        elapsed = time.perf_counter() - started
+    finally:
+        server.shutdown()
+    assert exc.value.kind == "timeout"
+    assert elapsed < 1.5
+
+
+def test_production_requires_https_llm_endpoints():
+    from app.core.config import ConfigError, Settings
+
+    base = {"app_env": "production", "cors_origins": ("https://hotel.example",), "log_format": "json"}
+    with pytest.raises(ConfigError, match="LLM_BASE_URL must use https"):
+        Settings(**base, llm_base_url="http://10.0.0.1:4000/v1").validate()
+    with pytest.raises(ConfigError, match="mock"):
+        Settings(**base, llm_provider="mock").validate()
+    Settings(**base, llm_base_url="https://llm.internal.example/v1").validate()
+    Settings(app_env="development", llm_base_url="http://127.0.0.1:4000/v1").validate()  # allowed outside production
+
+
+def test_default_provider_is_glm_and_reads_llm_variables():
+    from app.core.config import Settings
+
+    settings = Settings.from_env({"LLM_API_KEY": "k-123456789", "LLM_BASE_URL": "https://g.example/v1", "LLM_MODEL": "glm-5.2"})
+    assert settings.llm_provider == "glm" and settings.llm_configured and settings.model_primary == "glm-5.2"
+    assert "k-123456789" in settings.secret_values() and "k-123456789" not in repr(settings)
+
+
+# ---------- Provider-neutral failure contract ----------
+
+PLAIN_TEXT = "Check-in is at 2 PM."  # a text reply instead of the required tool call
+
+
+def _failing(provider_name: str, failure: str):
+    import httpx
+
+    from app.llm.glm_provider import GLMProvider
+
+    if provider_name == "scripted":
+        item = {
+            "timeout": LLMProviderError("timeout", "timed out"),
+            "unavailable": LLMProviderError("status", "503", status_code=503),
+            "malformed": LLMResponse("end_turn", PLAIN_TEXT, [], "scripted", "scripted", TokenUsage(5, 3, 0)),
+        }[failure]
+        return ScriptedLLMProvider([item])
+
+    if provider_name == "anthropic":
+        def handler(request):
+            if failure == "timeout":
+                raise httpx2.ReadTimeout("slow", request=request)
+            if failure == "unavailable":
+                return httpx2.Response(503, json={"type": "error", "error": {"type": "api_error", "message": "down"}})
+            return httpx2.Response(200, json={"id": "m", "type": "message", "role": "assistant", "model": "claude-opus-5", "stop_reason": "end_turn", "stop_sequence": None,
+                                              "content": [{"type": "text", "text": PLAIN_TEXT}], "usage": {"input_tokens": 5, "output_tokens": 3}})
+
+        client = anthropic.Anthropic(api_key="test-key-placeholder", max_retries=0, http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(handler)))
+        return AnthropicProvider(client.beta.messages)
+
+    def glm_handler(request):
+        if failure == "timeout":
+            raise httpx.ReadTimeout("slow", request=request)
+        if failure == "unavailable":
+            return httpx.Response(503, json={"error": "down"})
+        return httpx.Response(200, json={"model": "glm-5.2", "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": PLAIN_TEXT}}]})
+
+    return GLMProvider("https://g.example/v1", "k", timeout_seconds=5, max_retries=0, client=httpx.Client(transport=httpx.MockTransport(glm_handler)))
+
+
+@pytest.mark.parametrize("provider_name", ["anthropic", "glm", "scripted"])
+@pytest.mark.parametrize(
+    ("failure", "reason", "public_code"),
+    [("timeout", "provider_timeout", "LLM_TIMEOUT"), ("unavailable", "provider_status", "LLM_UNAVAILABLE"), ("malformed", "invalid_output", "LLM_UNAVAILABLE")],
+)
+def test_every_provider_fails_the_same_way(provider_name, failure, reason, public_code):
+    """Timeouts, outages and malformed output degrade identically whatever the provider: grounded offline answer + stable code."""
+    from app.container import build_container
+    from app.core.clock import FixedClock
+    from app.core.config import Settings
+    from app.core.errors import DEGRADATION_CODES
+    from tests.conftest import turn_request
+
+    container = build_container(Settings.for_tests(), clock=FixedClock(TODAY), llm_provider=_failing(provider_name, failure))
+    outcome = container.assistant.handle(turn_request(container, "What time is check-in?"))
+
+    assert outcome.mode == "offline" and outcome.trace.fallback_used
+    assert outcome.trace.fallback_reason == reason and DEGRADATION_CODES[reason] == public_code
+    assert outcome.reply.sources and outcome.reply.sources[0].id == "timings.check_in_out"
+    if failure == "malformed":
+        assert outcome.reply.text != PLAIN_TEXT  # unvalidated model text is never shown

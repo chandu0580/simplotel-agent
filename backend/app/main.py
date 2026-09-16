@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 
+import anyio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,6 +25,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        anyio.to_thread.current_default_thread_limiter().total_tokens = settings.worker_threads
         log_event(
             logger,
             "startup",
@@ -33,6 +35,8 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             prompt_version=PROMPT_VERSION,
             hotels=len(container.tenants.hotel_ids()),
             auth_mode=settings.auth_mode,
+            worker_threads=settings.worker_threads,
+            state_backend=settings.state_backend,
         )
 
         async def purge_expired_conversations():
@@ -44,7 +48,11 @@ def create_app(settings: Settings | None = None, container: Container | None = N
 
         task = asyncio.create_task(purge_expired_conversations())
         yield
+        # Graceful shutdown: uvicorn has already stopped accepting connections and drained in-flight
+        # requests (bounded by --timeout-graceful-shutdown); now flush and close dependencies.
         task.cancel()
+        container.close()
+        log_event(logger, "shutdown_complete")
 
     docs = settings.expose_api_docs
     app = FastAPI(

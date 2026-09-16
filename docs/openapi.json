@@ -32,7 +32,7 @@
           "operations"
         ],
         "summary": "Ready",
-        "description": "Readiness: can this instance usefully serve guests?\n\nOnly the knowledge store is required. A reservation outage is reported as \"degraded\" but keeps the\ninstance in service: every replica shares the same PMS, so failing readiness would remove all of them\nand stop FAQ answers that still work. The LLM is optional too (offline fallback exists).",
+        "description": "Readiness: can this instance usefully serve guests?\n\nRequired: the knowledge store and the conversation state store (Redis when STATE_BACKEND=redis).\nThe audit store is reported but not required: events are buffered and dropping them is logged. A reservation outage is reported as \"degraded\" but keeps the\ninstance in service: every replica shares the same PMS, so failing readiness would remove all of them\nand stop FAQ answers that still work. The LLM is optional too (offline fallback exists).",
         "operationId": "ready_ready_get",
         "responses": {
           "200": {
@@ -1569,6 +1569,24 @@
         "type": "object",
         "title": "CreateConversationRequest"
       },
+      "Degradation": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "Degradation"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -1704,6 +1722,16 @@
           "trace_id": {
             "type": "string",
             "title": "Trace Id"
+          },
+          "degradation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Degradation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "prompt_version": {
             "anyOf": [

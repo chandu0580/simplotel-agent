@@ -26,12 +26,20 @@ _SENSITIVE_KEYS = {"api_key", "anthropic_api_key", "authorization", "password", 
 
 
 def bind_context(**fields: str | None) -> None:
-    current = dict(_context.get() or {})
+    """Adds fields to the current request context.
+
+    Updates the request's dict in place: sync endpoints run in a worker thread with a *copy* of the
+    context, and in-place updates are what let the middleware's access log see ids bound there.
+    """
+    current = _context.get()
+    if current is None:
+        current = {}
+        _context.set(current)
     current.update({k: v for k, v in fields.items() if v is not None})
-    _context.set(current)
 
 
 def reset_context() -> None:
+    """Starts a fresh context (a new dict, so no ids leak from a previous request)."""
     _context.set({})
 
 
@@ -134,6 +142,9 @@ def configure_logging(level: str, fmt: str, secret_values: list[str] | None = No
     handler._hotel_assistant = True  # type: ignore[attr-defined]
     root.addHandler(handler)
     root.setLevel(level)
+    # HTTP client libraries log full request URLs at INFO (internal gateway addresses); keep them quiet.
+    for noisy in ("httpx", "httpcore", "httpx2", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def log_event(logger: logging.Logger, event: str, level: int = logging.INFO, **fields: Any) -> None:

@@ -85,7 +85,7 @@ class MockReservationProvider:
             self._bookings[booking.booking_id] = booking
             return booking
 
-        return self.idempotency.run_once(f"booking:{ctx.tenant_id}:{ctx.hotel_id}", idempotency_key, request.model_dump(mode="json"), operation)
+        return self.idempotency.run_once(f"booking:{ctx.tenant_id}:{ctx.hotel_id}", idempotency_key, request.model_dump(mode="json"), operation, result_model=Booking)
 
     def modify_booking(self, ctx: TenantContext, booking_id: str, changes: dict, idempotency_key: str) -> Booking:
         raise ReservationError(ReservationErrorCode.NOT_SUPPORTED, "Booking changes are not supported by the mock provider.")
@@ -125,6 +125,9 @@ class ResilientReservationProvider:
         self.timeout = timeout_seconds
         self.read_retries = read_retries
         self.availability_ttl = availability_ttl_seconds
+        # Overall budget for one logical call (all attempts + backoff). Tools that call this provider
+        # use a timeout above this budget, so retries never outlast the caller.
+        self.deadline = timeout_seconds * (read_retries + 1) + 1.0
 
     def _guarded(self, fn, *, retries: int):
         def shielded():
@@ -139,11 +142,12 @@ class ResilientReservationProvider:
                     raise
                 return _BusinessOutcome(exc)
 
-        def attempt():
-            return self.breaker.call(shielded)
+        def with_retries():
+            return retry(shielded, attempts=1 + retries, retry_on=(IntegrationTimeout, ConnectionError), deadline_seconds=self.deadline)
 
         try:
-            result = retry(attempt, attempts=1 + retries, retry_on=(IntegrationTimeout, ConnectionError))
+            # The breaker wraps the whole retry sequence: one logical call counts as one failure.
+            result = self.breaker.call(with_retries)
         except CircuitOpenError as exc:
             raise ReservationError(ReservationErrorCode.UNAVAILABLE, "Reservation system is temporarily unavailable.", retryable=True) from exc
         except (IntegrationTimeout, ConnectionError) as exc:

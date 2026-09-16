@@ -33,6 +33,9 @@ class LLMRequest:
     effort: str | None = None
     tools: list[LLMToolSpec] = field(default_factory=list)
     single_tool_call: bool = True
+    # Ask the provider to force a tool call. GLM honours it; Anthropic can't while thinking is on,
+    # so that adapter relies on the prompt instruction instead.
+    require_tool: bool = False
     cache_system_prompt: bool = True
 
 
@@ -65,7 +68,7 @@ class LLMResponse:
 class LLMProviderError(Exception):
     """Transport/API/SDK failure. `kind` is a stable category for logs and metrics."""
 
-    def __init__(self, kind: Literal["status", "connection", "sdk"], message: str, status_code: int | None = None):
+    def __init__(self, kind: Literal["status", "connection", "timeout", "sdk", "protocol"], message: str, status_code: int | None = None):
         super().__init__(message)
         self.kind = kind
         self.status_code = status_code

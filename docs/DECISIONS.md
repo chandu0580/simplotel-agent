@@ -41,7 +41,7 @@
 
 ## Which parts should use AI and which should stay deterministic?
 
-| AI (Claude) | Deterministic code |
+| AI (the LLM: GLM by default, Claude as the alternative adapter) | Deterministic code |
 |---|---|
 | Understanding free-text questions, including paraphrases and typos | Date validation and business rules (not past, at most 30 nights, check-out after check-in) |
 | Choosing between an FAQ answer, the availability tool and the details form | Occupancy fit (adults, children, total per room) |
@@ -49,7 +49,7 @@
 | Writing a concise answer from the relevant knowledge entries, across several entries if needed | Rendering availability results and their summary text |
 | Handling ambiguity ("breakfast depends on the room") and correcting wrong assumptions | Checking cited sources against the knowledge base |
 | Suggesting follow-up questions | Contact details on every fallback |
-|  | The booking form: submitted directly to `/api/availability` |
+|  | The booking form: submitted directly to the conversation's availability endpoint (`/api/v1/hotels/{hotel_id}/conversations/{id}/availability`) |
 |  | Input validation, error format, retries and timeouts, choosing between AI and offline mode |
 
 **The rule:** the model interprets and phrases. Code decides and computes. Anything that could cost the hotel money or mislead a guest if wrong (price, availability, policy numbers) is either code or checked by code.
@@ -78,7 +78,7 @@ Several layers, so no single one has to be perfect:
 6. **Clarify instead of guessing.** Missing dates or guests, or an ambiguous relative date, lead to a pre-filled form that names the assumed date, never a silent guess. Date validity is left to deterministic code, not the model.
 7. **Guaranteed escalation.** Every fallback includes front-desk contact details, added by code.
 8. **Treating guest text as data.** Guest input is wrapped in `<guest_message>` tags and the system prompt says it can't override instructions.
-9. **Evals as a regression gate.** In AI mode, a scenario answered by the offline fallback counts as a failure, so a broken model integration can't hide behind the fallback. Scenarios for false premises, unsupported questions, prompt injection and ambiguity run before every prompt or model change. See [EVALUATION.md](EVALUATION.md).
+9. **Evals as a regression gate.** In AI mode, a scenario answered by the offline fallback counts as a failure, so a broken model integration can't hide behind the fallback. Scenarios for false premises, unsupported questions, prompt injection and ambiguity run before every prompt or model change. A separate holdout suite of 12 adversarial scenarios, written after prompt development and never used for tuning, checks that the prompt was not overfitted to the development set. See [EVALUATION.md](EVALUATION.md).
 10. **What I'd add for production:**
    - Sample conversations weekly and label them for groundedness.
    - Have a second, cheaper model judge whether the answer is supported by the cited entries, and flag or block it if not.
@@ -88,14 +88,17 @@ Several layers, so no single one has to be perfect:
 
 | Failure | Behaviour |
 |---|---|
-| **Model down, timeout (20 s × 1 retry), rate-limited, refusal, bad or truncated output** | The backend catches it as `LLMError` and answers with the offline engine: keyword FAQ matching, availability intent detection and deterministic search. The response is `200` with `mode: "offline"` and a notice. The UI shows a "FAQ mode" badge and a one-time notice. **The guest still gets an answer or the booking form.** |
+| **Model down, timeout (20 s × 1 retry), rate-limited, refusal, bad or truncated output** | The backend catches it as `LLMError` and answers with the offline engine: keyword FAQ matching, availability intent detection and deterministic search. The response is `200` with `mode: "offline"`, a notice, and `meta.degradation` set to `LLM_TIMEOUT` or `LLM_UNAVAILABLE`. The UI shows a "FAQ mode" badge and a one-time notice. **The guest still gets an answer or the booking form.** |
 | **LLM misconfigured or deliberately switched off** (`AI_ENABLED=false`) | Same offline path. This works as a kill switch if the model misbehaves in production. |
 | **Browser can't reach the backend** (network down, backend down) | A red error bubble: "We couldn't reach the hotel assistant…" with **Try again**. The guest's message stays in place and isn't duplicated on retry. |
 | **Request hangs** | The client aborts after 45 s and shows a timeout message with retry. After 8 s the indicator already says "Still working on it…". |
 | **Backend 500** | A generic friendly message; stack traces never reach the client. The `request_id` ties the failure to the server logs. |
 | **Invalid input** (422) | Schema errors list the invalid fields. Booking-rule errors appear inside the form, and the guest's entries are kept. |
 | **`/api/hotel` fails** | The header uses built-in defaults and chat still works. |
-| **Availability data unavailable** (in production, a PMS or booking engine outage) | Not modelled in the mock. The plan: time-box the call, show "live availability is temporarily unavailable" with contact buttons, and never fall back to cached prices presented as live. |
+| **Availability data unavailable** (in production, a PMS or booking engine outage) | The mock sits behind a resilience wrapper: a 5 s timeout per attempt, read retries bounded by a 16 s deadline, and a circuit breaker. In chat the guest gets "I can't check live availability right now" with contact details (`200`, `meta.degradation` `RESERVATION_UNAVAILABLE`, `TOOL_TIMEOUT` or `TOOL_UNAVAILABLE`); the booking form gets `503 RESERVATION_UNAVAILABLE` with `Retry-After: 30`. Only successful results from the last 15 s are served from cache; an expired entry is never used as a fallback. No real PMS is connected; see [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md). |
+| **Conversation busy** (a second message while the first is still being answered, another tab, a double submit) | `409 CONVERSATION_BUSY` with `Retry-After: 2`. The chat client waits (capped at 3 s) and retries once, then shows "Still answering your previous message". |
+| **Shared state unavailable** (Redis down, multi-replica mode) | Conversation reads and writes return `503 STATE_UNAVAILABLE`; the UI shows its "temporarily unavailable" message. The rate limiter fails open and counts the errors. |
+| **Request too large** | Bodies over 64 KB are rejected with `413 PAYLOAD_TOO_LARGE` at nginx and in the backend. The UI shows a message without a retry button. |
 
 ## How would you measure whether the feature is actually useful?
 
@@ -136,19 +139,19 @@ These are **proposed** metrics. Nothing here has been measured in production.
 3. **Safety and quality.**
    - Groundedness checking with an LLM judge on sampled traffic.
    - A larger eval set built from real anonymised questions, gating CI.
-   - Moderation and PII handling.
+   - Moderation. (Masking of card numbers, emails and phone numbers before the model is now implemented; names and addresses are not detected. See [PRIVACY.md](PRIVACY.md).)
    - Multilingual support: Hindi and other regional languages matter for this market.
 4. **Streaming responses** for better perceived latency, and re-tune `effort` per route from measured quality.
-5. **Abuse and cost controls.** Rate limiting per IP or session, bot protection, request size limits at the edge, token budgets per conversation, and alerts on cost anomalies.
-6. **Session storage on the server.** Keep conversations server-side, so the client can't forge history, and to support handoff to a human agent with the full transcript and analytics.
-7. **Observability.** JSON logs, OpenTelemetry traces, dashboards and alerts for the metrics above, and PII redaction in logs.
+5. **Abuse and cost controls.** Bot protection, token budgets per conversation, and alerts on cost anomalies. (Rate limiting by IP burst, IP, tenant, hotel and conversation, and a 64 KB request size limit at the edge and in the backend, are now implemented.)
+6. **Human handoff.** Hand a conversation to a human agent with the full transcript and analytics. (Server-side conversations, so the client can't forge history, are now implemented, in memory or shared in Redis.)
+7. **Observability.** OpenTelemetry traces, and dashboards and alerts for the metrics above. (JSON logs with secret redaction and request, tenant and conversation context are implemented.)
 8. **Frontend.**
    - An embeddable widget build that loads in the hotel's site without slowing it down.
    - Theming per hotel brand.
    - Chat history saved in session storage so it survives a refresh.
    - Localisation.
    - Full keyboard and screen-reader testing.
-9. **Privacy and compliance.** A data retention policy, a consent notice, and compliance with India's DPDP Act (and GDPR for EU guests).
+9. **Privacy and compliance.** A consent notice, and compliance with India's DPDP Act (and GDPR for EU guests). No compliance certification is claimed. (Guest deletion, conversation TTLs and a retention job for PostgreSQL audit events exist; see [PRIVACY.md](PRIVACY.md).)
 
 ## Stack and design choices
 
@@ -160,7 +163,7 @@ These are **proposed** metrics. Nothing here has been measured in production.
 
 **Why not a vector database or RAG?** The knowledge base is about 2.8k tokens and fits entirely in the prompt, so retrieval would add a component that can *miss* the right entry, plus an embedding pipeline to maintain, and remove no hallucination risk. A production system with large or multi-property content (long policy documents, local guides) would add semantic retrieval, keeping the same citation check.
 
-**Why is the answer a tool call?** One decision per turn: answer, check availability, or ask for details, each with a strict schema. It doesn't depend on a provider supporting a JSON output format and tool calls in the same request. The first version combined the two; when the unchanged code path was pointed at a different real model during development (`glm-5.2`, not Claude), that model never called a tool while the output format was set (0 of 4 probes) and chose the right tool 4 of 4 times without it. Anthropic documents the combination as supported, so this is a portability and robustness choice, not a verified Claude fix.
+**Why is the answer a tool call?** One decision per turn: answer, check availability, or ask for details, each with a strict schema. It doesn't depend on a provider supporting a JSON output format and tool calls in the same request. The first version combined the two; when the unchanged code path was pointed at a different real model during development (`glm-5.2`, not Claude), that model never called a tool while the output format was set (0 of 4 probes) and chose the right tool 4 of 4 times without it. Anthropic documents the combination as supported, so this is a portability and robustness choice, not a verified Claude fix. A later GLM failure (occasional plain-text replies instead of a tool call) was fixed at the adapter layer by forcing the tool call; see [GLM-native adapter as the default runtime provider](#glm-native-adapter-as-the-default-runtime-provider).
 
 **Why use an LLM at all?** Guests phrase things freely: "we're 2 + a kid", "next weekend", "does *it* include breakfast?". An LLM handles paraphrase, follow-ups, false premises, relative dates and choosing between answering and checking availability far better than rules. The offline engine shows what rules alone give you: correct but literal, and date handling limited to ISO format.
 
@@ -170,22 +173,23 @@ These are **proposed** metrics. Nothing here has been measured in production.
 - **Server-side conversations (v1):** the original assignment API was stateless and trusted client-sent history, which was fine for a demo but let a client forge history. The v1 API keeps history and booking context on the server, keyed by tenant, hotel and conversation id, with expiry and guest deletion. The legacy `/api/chat` endpoint still accepts client history for backward compatibility and is marked deprecated.
 - **One LLM call per turn instead of an agent loop:** every tool result is final. Availability results go straight to the UI, and the details form is itself the reply, so there is nothing to feed back to the model. A loop would add latency and cost without adding value, and numbers would be paraphrased by the model.
 - **Offline engine as a real fallback, not an error page:** it also lets the whole app, E2E tests and evals run with no API key and no cost.
-- **Model choice:** `claude-opus-5` for the best judgment on grounding and ambiguity, run at `effort: low` to keep chat latency down. The model and effort are environment settings, so they can be tuned from eval results without code changes.
-- **Server-side refusal fallback** (`fallbacks: "default"`): if the model declines a request, the API retries on a fallback model instead of failing the guest's turn.
-- **Tests at three levels:**
-  - pytest with a fake Anthropic client covers business logic, the API contract, tool handling, grounding checks and every failure path.
+- **Model choice:** the default runtime provider is GLM (`glm-5.2`) through the GLM-native adapter, because it has been evaluated live and the adapter can force a tool call. The Anthropic adapter defaults to `claude-opus-5` at `effort: low` for judgment on grounding and ambiguity at a chat-friendly latency, but the live Anthropic API is **not verified** (no Anthropic credential). The provider, model and effort are environment settings, so they can be tuned from eval results without code changes.
+- **Server-side refusal fallback** (`fallbacks: "default"`, Anthropic adapter only): if the model declines a request, the API retries on a fallback model instead of failing the guest's turn. Tested against the request contract only, not the live API.
+- **Tests at several levels:**
+  - pytest covers business logic, the API contract, tool handling, grounding checks and every failure path, using a fake Anthropic client, the real Anthropic SDK against a mocked HTTP transport, and GLM adapter tests (including a real slow HTTP server for timeouts). Provider-neutral contract tests hold the Anthropic, GLM and scripted providers to the same failure behaviour.
+  - Integration tests run against real Redis and PostgreSQL containers.
   - Vitest and Testing Library cover the UI states.
   - Playwright covers the real integrated stack on desktop and mobile.
-  - A separate eval runner measures model behaviour. It has been run offline and against a development provider (GLM); it has not yet been run against the live Claude API.
+  - A separate eval runner measures model behaviour. It has been run offline and against GLM (development and holdout suites). GLM results are evidence about the GLM runtime only; the eval has not been run against the live Claude API.
 
 ## Enterprise evolution decisions
 
 After the assignment, the codebase was evolved into an enterprise architecture foundation. The main decisions:
 
 - **Modular monolith, not microservices.** There is one deployable, with packages behind interfaces and one composition root (`app/container.py`). Service extraction waits for a measured reason: independent scaling, team ownership, or a different release cadence. Kafka, Kubernetes, a service mesh and CQRS were deliberately not introduced.
-- **Interfaces where an implementation will change, not everywhere.** `LLMProvider`, `KnowledgeProvider`, `Retriever`, `ReservationProvider`, `ConversationRepository`, `RateLimiter`, `Cache`, `TraceSink`, `EventPublisher` and `AuthProvider` each have a real second implementation today (usually a test or resilience wrapper) or a named production successor.
+- **Interfaces where an implementation will change, not everywhere.** `LLMProvider`, `KnowledgeProvider`, `Retriever`, `ReservationProvider`, `ConversationRepository`, `RateLimiter`, `LockStore`, `IdempotencyStore`, `Cache`, `TraceSink`, `EventPublisher` and `AuthProvider` each have a real second implementation today (GLM and Anthropic adapters, Redis-backed state stores, the PostgreSQL audit sink, or a test or resilience wrapper) or a named production successor.
 - **Multi-tenancy from the request inwards.** Every request resolves a `TenantContext` before touching data. Repositories are keyed by tenant and hotel, and a second demo tenant exists so isolation is tested for real. A hotel of another tenant returns the same 404 as a hotel that doesn't exist.
-- **No fake authentication.** Admin endpoints return 401 `AUTH_NOT_CONFIGURED` by default. A static-token provider exists for local development only and is rejected by production configuration validation. Production authentication is OIDC/JWT, documented but not built.
+- **No fake authentication.** Admin endpoints return 401 `UNAUTHORIZED` with `details=[{"reason": "auth_not_configured"}]` by default. A static-token provider exists for local development only and is rejected by production configuration validation. Production authentication is OIDC/JWT, documented but not built.
 - **Mutations designed, not exposed.** `create_booking` exists to exercise authorization, guest confirmation, idempotency and audit end to end. It is behind a flag and never offered to the model.
 - **Readiness means "can serve guests".** A reservation-system outage is reported as degraded but keeps instances in service. Every replica shares the same PMS, so failing readiness would remove all of them and also stop FAQ answers that still work.
 - **Low-cardinality metrics.** Metrics have no tenant or hotel labels, because thousands of hotels would multiply series counts. Per-tenant analytics come from structured traces and events.
@@ -199,3 +203,152 @@ After the assignment, the codebase was evolved into an enterprise architecture f
   - A liveness check that shared the request thread pool.
   - A readiness check that would have removed every replica during a PMS outage.
   - Cache-write tokens missing from cost accounting.
+
+## Hardening phase decisions
+
+The production hardening and evidence phase added shared state, a durable audit store, stricter resilience and measured defaults. Each record below gives the context, the decision, its consequences and the evidence behind it. None of this makes the system production-ready: live Anthropic verification, GitHub Actions runs, a real PMS integration, OIDC authentication, measured SLOs and production capacity are all still missing ([ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md)).
+
+### GLM-native adapter as the default runtime provider
+
+**Context.** Development evals ran GLM (`glm-5.2`) through its Anthropic-format endpoint using the Anthropic adapter, with results of 33/34, 34/34 and 32/34. The root cause of the `follow-up-breakfast` failure was that GLM sometimes answered in plain text instead of calling a tool. Over that protocol the tool choice could not be forced: the Anthropic adapter sends `tool_choice: auto`, because a forced tool choice is rejected while thinking is on. A plain-text reply fails as `invalid_output`, so the guest got an offline answer. There is no Anthropic credential, so Claude could not be evaluated instead.
+
+**Decision.** Add `app/llm/glm_provider.py`, an adapter over the OpenAI-compatible Chat Completions protocol that sends `tool_choice="required"` and `parallel_tool_calls=false`, maps failures to typed errors (timeout, connection, status, protocol), uses httpx timeouts, and retries transient failures with jittered backoff. Make it the default (`LLM_PROVIDER=glm`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_MODEL_FAST`). Keep `AnthropicProvider` behind the same `LLMProvider` interface, selectable with `LLM_PROVIDER=anthropic`. The fix was made at the adapter layer. No eval assertion on behaviour was loosened; the only evaluator change was for `injection-pretend-policy`, a false negative where a correct refusal was phrased "does not allow", and it extended an include list.
+
+**Consequences.**
+- The plain-text failure mode is removed at the source for GLM. The Anthropic adapter still relies on the prompt instruction to call exactly one tool.
+- The provider is a configuration choice, and every provider must pass the same provider-neutral contract tests, including the failure contract (timeout → `provider_timeout` → `LLM_TIMEOUT`; 503 → `provider_status` → `LLM_UNAVAILABLE`; plain text → `invalid_output` → `LLM_UNAVAILABLE`; all degrade to a grounded offline answer).
+- GLM results are evidence about the GLM runtime only, not Claude verification. **Anthropic live API: NOT VERIFIED — no Anthropic credential.**
+- `effort` and the server-side refusal fallback apply to the Anthropic adapter only. In production, `LLM_BASE_URL` and `ANTHROPIC_BASE_URL` must use `https://`. `LLM_PROVIDER=mock` exists for load tests and is rejected in production.
+
+**Evidence.**
+- Development suite (34 scenarios) with the GLM adapter: run 1 34/34 (served by AI 33/34, the 34th being `model-failure-fallback`, which simulates an outage on purpose; groundedness 13/13; decision accuracy 18/18; p50 5511 ms, p95 12620 ms), run 2 34/34 (groundedness 14/14; decision accuracy 18/18; p50 5593 ms, p95 14280 ms). Files: `evals/results/glm-5.2-adapter-run1.{json,md}`, `evals/results/glm-5.2-adapter-run2.{json,md}`.
+- Holdout suite (`evals/holdout.json`, 12 adversarial scenarios, 10 critical): GLM 12/12, critical 10/10, served by AI 12/12 (`evals/results/glm-5.2-holdout-run1`).
+- `tests/test_contracts.py`: `test_glm_request_forces_a_single_tool_call_and_omits_anthropic_parameters`, `test_glm_errors_map_to_typed_provider_errors`, `test_glm_retries_transient_errors_but_not_client_errors`, `test_glm_timeout_abandons_the_request_within_the_budget` (real slow HTTP server: kind `timeout`, under 1.5 s for a 0.3 s timeout), `test_every_provider_fails_the_same_way`, `test_default_provider_is_glm_and_reads_llm_variables`, `test_production_requires_https_llm_endpoints`. `tests/test_claude_sdk_contract.py` exercises the Anthropic adapter with the real SDK.
+
+### Redis for ephemeral shared state, PostgreSQL for durable records
+
+**Context.** Conversations, rate-limit windows, idempotency records and conversation locks lived in process memory. With several replicas, limits were multiplied, conversations were not found on other replicas, per-conversation locks did not serialise turns, and duplicate bookings were not prevented. Domain events existed only in logs and a ring buffer.
+
+**Decision.**
+- `STATE_BACKEND=memory` (default, one process) or `redis` (`REDIS_URL`, `REDIS_KEY_PREFIX`). `app/state/redis_backend.py` implements the conversation repository (JSON with native TTL, compare-and-set on `version` in Lua), a sliding-window rate limiter (sorted set + Lua, Redis server time, hashed keys, fails open), an idempotency store (lease lock plus stored result with request fingerprint) and a lock store (token lease, compare-and-delete release).
+- Redis holds only state that may be lost without losing business records. Durable records belong in PostgreSQL: `migrations/0001_domain_model.sql` defines the domain model with `tenant_id` on every table, composite keys and forced row-level security, and `PostgresAuditSink` writes domain events when `DATABASE_URL` is set.
+- Knowledge snapshots and availability results stay in a per-process TTL cache by design: the TTLs are short, they are cheap to rebuild, and keeping them local avoids deserialising Python objects from a shared store.
+
+**Consequences.**
+- Replicas share conversations, limits, idempotency results and locks. Readiness includes a `state` check, and `/ready` returns 503 when Redis is unreachable.
+- A Redis outage returns 503 `STATE_UNAVAILABLE` for conversations and locks, makes the idempotency store report `UNAVAILABLE`, and leaves rate limits unenforced (logged, counted in `state_backend_errors_total{component="rate_limiter"}`), because rejecting every guest would be worse than briefly unenforced limits.
+- Replicas can briefly serve different cached knowledge or availability, up to the cache TTL. Circuit breaker state is also per process.
+- Only the audit sink is wired to PostgreSQL. Repositories for conversations, messages, tool calls, bookings, knowledge and evaluations are designed (schema only), not implemented.
+
+**Evidence.**
+- `tests/integration/test_redis_state.py` (real Redis 7.4 container): compare-and-set and native TTL, a rate limit shared across 3 limiters (5 allowed of 9), fail-open, 503 on outage, locks across clients, idempotency across 3 stores (9 concurrent calls, operation ran once), `IN_PROGRESS`; three in-process replicas: 6 concurrent turns stored 12 messages, 9 concurrent duplicate bookings produced 1 booking id, a shared IP limit allowed 6 of 9, availability results were identical, a cross-tenant read on another replica returned 404, and readiness returned 503 with Redis unreachable.
+- `tests/integration/test_postgres.py` (real PostgreSQL 17 container, non-superuser application role): idempotent migrations and checksum drift detection, row-level security forced on all 11 tables, cross-tenant reads and writes blocked, composite foreign keys blocking cross-tenant references, per-tenant idempotency key uniqueness, tenant-scoped audit events, retention.
+- Container stack (`docker-compose.scale.yml`: nginx, 3 backend replicas, Redis, PostgreSQL, migration job; AI disabled): `scripts/verify_stack.py --expect-shared-state` passed 33/33 checks. Details in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### Locks for efficiency, compare-and-set for correctness
+
+**Context.** A per-conversation `threading.Lock` only serialised turns within one process. A distributed lock needs a lease so a crashed holder can't block a conversation forever, but a lease can expire while its holder is still waiting on the model, and then two turns can run at once.
+
+**Decision.**
+- Chat turns and booking-form submissions on a conversation take a lease lock from the `LockStore` (`CONVERSATION_LOCK_WAIT_SECONDS` 30, `CONVERSATION_LOCK_LEASE_SECONDS` 120). Configuration validation requires the lease to exceed the LLM time budget, `LLM_TIMEOUT_SECONDS × (LLM_MAX_RETRIES + 1)`.
+- Conversations carry a `version`, and `save(conversation, expected_version)` is compare-and-set in both backends.
+- A lock that can't be acquired in time, or a version conflict, returns 409 `CONVERSATION_BUSY` with `Retry-After: 2`. The chat client waits (capped at 3 s) and retries once.
+
+**Consequences.**
+- The lock stops concurrent turns from spending model calls whose results would be rejected. The version check guarantees no lost update even if a lease expires mid-turn.
+- Under genuinely concurrent submissions a guest can see a busy response. A turn whose lease expired can still spend a model call and then be rejected.
+- Conversation deletion does not take the lock.
+
+**Evidence.**
+- With locks disabled (compare-and-set alone), 6 concurrent turns on 3 replicas: 1 saved, 5 rejected with 409, no lost update.
+- With locks: 6 concurrent turns on 3 in-process replicas stored 12 messages (`test_concurrent_turns_on_three_replicas_lose_nothing`); in the 3-container stack, 8 concurrent turns stored 16 messages.
+- `tests/test_state.py`: `test_lock_store_excludes_waits_and_expires_leases`, `test_repository_save_is_compare_and_set`, `test_turn_on_a_locked_conversation_is_409_busy`, `test_version_increments_once_per_saved_turn`, `test_state_configuration_is_validated`. `tests/integration/test_redis_state.py`: `test_conversation_repository_cas_and_native_ttl`, `test_lock_store_across_clients`.
+
+### Circuit breaker wraps the retry sequence, with a single half-open trial
+
+**Context.** The reservation wrapper used to run `retry` around `breaker.call`, so every attempt counted: one request that timed out three times added three failures. In the half-open state any number of concurrent calls went through to a dependency that might still be down. The retry sequence had no overall deadline, so three 5 s attempts plus backoff could outlast the 15 s `check_availability` tool timeout.
+
+**Decision.**
+- `breaker.call(retry(...))`: the breaker wraps the whole retry sequence, so one logical call counts as one failure.
+- `retry(..., deadline_seconds)` stops starting new attempts once the budget is spent. `ResilientReservationProvider` uses a deadline of timeout × (retries + 1) + 1 s, 16 s by default, and the `check_availability` tool timeout was raised from 15 s to 20 s so the wrapper always gives up first.
+- Half-open gives exactly one trial permit. Concurrent callers during the trial get `CircuitOpenError`. A failed trial reopens the breaker for a full cooldown regardless of the threshold. Errors the breaker does not classify as failures (business or validation errors) never count and release the trial permit.
+
+**Consequences.**
+- The failure threshold now means consecutive failed requests, not attempts.
+- While a trial is in flight, other guests get the "can't check live availability" reply instead of adding load to a recovering dependency.
+- Breaker state is per process, so each replica detects an outage on its own.
+- A timeout stops the caller waiting but does not kill the worker thread; the call may finish in the background. Mutating calls are not retried and rely on idempotency keys for this reason.
+
+**Evidence.** `tests/test_tools_and_resilience.py`: `test_half_open_allows_exactly_one_concurrent_trial` (5 concurrent callers, 1 trial call), `test_failed_half_open_trial_reopens_for_a_full_cooldown`, `test_non_failure_error_during_trial_releases_the_permit`, `test_one_logical_call_counts_as_one_breaker_failure` (3 attempts, breaker still closed at threshold 2), `test_retry_deadline_stops_new_attempts` (fake clock), `test_reservation_deadline_is_below_the_tool_timeout`.
+
+### Sync endpoints instead of async wrappers
+
+**Context.** Found while verifying the container stack. The post-message endpoint, both availability endpoints and the legacy chat and availability endpoints were `async def` functions that handed the service call to the thread pool, but ran tenant resolution and rate limiting first, on the event loop. With `STATE_BACKEND=redis` those are Redis round trips, so a slow Redis call blocked every request on that process, including liveness.
+
+**Decision.** Convert those endpoints to plain `def` endpoints, which FastAPI runs entirely in the worker thread pool. `/health` is the only `async` endpoint.
+
+**Consequences.**
+- Nothing that does network I/O runs on the event loop, and `/health` stays responsive when guest requests are waiting on state.
+- Each request holds a worker thread for its whole duration, so the thread pool size caps concurrency per process (next record).
+
+**Evidence.** `tests/test_state.py::test_blocking_state_calls_never_run_on_the_event_loop`: only `/health` is async, and `/health` answers in under 300 ms while 4 requests wait on a rate limiter that takes 0.5 s.
+
+### WORKER_THREADS default of 150
+
+**Context.** A local load test (`python -m perf.load_test`; Windows 11, 4 cores / 8 threads, Python 3.13.3, 1 uvicorn worker, in-memory state, rate limits off, client on the same machine) ran a mock AI turn with a fixed 1500 ms model latency on 40 worker threads. Throughput stayed at about 25 requests per second (25.3 at 50 users, 24.9 at 100 users, p95 6063.6 ms at 100 users) with average CPU at or below 20%. That is 40 threads / 1.5 s: the thread pool, not the CPU, was the limit. This is a local benchmark, not production capacity.
+
+**Decision.** `WORKER_THREADS` (default 150, allowed 1–1000) sets the AnyIO default thread limiter at startup and is logged in the `startup` event.
+
+**Consequences.**
+- More concurrent AI turns per process, at the cost of memory per thread.
+- It does not help CPU-bound paths: the offline turn saturates one core at about 25 users, and beyond that latency grows. More capacity there needs more replicas or workers.
+- The numbers come from one local machine and a mock model, so they are not a capacity plan. See [PERFORMANCE.md](PERFORMANCE.md).
+
+**Evidence.** `perf/load_results.md` (40 threads). `perf/load_results_mock_ai_threads150.md` (150 threads): 50 users 30.8 rps, p50 1534.4 ms, p95 1679.4 ms, p99 1768.2 ms; 100 users 49.8 rps, p50 1522.1 ms, p95 5299.8 ms, p99 7040.8 ms; RSS 100.7 MB and 112.8 MB; 0% errors.
+
+### IP burst limit relaxed to 30 per 10 s
+
+**Context.** An `ip_burst` limit was added in front of the per-minute IP limit, with a first default of 15 requests per 5 s. In the 3-replica container stack it was enforced once across replicas (exactly 15 of 30 requests allowed). Then Playwright's desktop and mobile runs, in parallel from one IP, hit it. Guests sharing a hotel's Wi-Fi share one public IP in the same way.
+
+**Decision.** Relax the default to 30 requests per 10 s (`RATE_LIMIT_IP_BURST`, `RATE_LIMIT_BURST_WINDOW_SECONDS`). The other dimensions are unchanged: `ip` 60/min (checked before hotel resolution, so unknown-hotel probes count), `tenant` 3000/min, `hotel` 1200/min, `conversation` 20/min.
+
+**Consequences.**
+- Short bursts from one IP are allowed to be twice as large. The per-minute IP, tenant, hotel and conversation limits still apply.
+- Guests behind one IP still share the IP budgets.
+- The recorded container result (15 of 30) used the old default; the CI verification uses the new defaults.
+
+**Evidence.** `tests/test_state.py::test_ip_burst_limit_rejects_rapid_fire`, `tests/test_state.py::test_tenant_rate_limit_applies_across_endpoints`, `scripts/verify_stack.py`, defaults in `app/core/config.py`.
+
+### PII masking before the model
+
+**Context.** Guest messages are sent to the model provider, stored in conversation state for up to the conversation TTL, and replayed as history. The assistant can't book, charge or call anyone, so it has no use for payment card numbers, email addresses or phone numbers.
+
+**Decision.** `app/core/privacy.py` masks Luhn-valid card numbers always, and email addresses and phone numbers (8–15 digits, dates excluded) when `PII_MASK_CONTACT_DETAILS=true` (the default). `AssistantService.handle` applies it to the message and history before the text reaches the model, the stored transcript or the trace, and to legacy client-sent history too. Masking is idempotent. Only the masked kinds are recorded (`trace.pii_masked`, `pii_masked_total{kind}`).
+
+**Consequences.**
+- The masked values never reach the model provider or storage, so nothing downstream can use or leak them.
+- Detection is pattern-based. Names, addresses and free-text identifiers are not detected, which is a recorded residual risk. See [PRIVACY.md](PRIVACY.md).
+
+**Evidence.** `tests/test_privacy.py`: `test_personal_data_is_masked`, `test_ordinary_hotel_questions_are_untouched` (false-positive cases such as dates, prices, a 16-digit non-Luhn reference, times and room numbers), `test_contact_masking_can_be_disabled_but_cards_cannot`, `test_masking_is_idempotent`, `test_model_storage_and_trace_never_see_the_raw_values`, `test_legacy_history_is_minimised_too`. The PostgreSQL integration test checks that recorded events contain no guest text or phone numbers.
+
+### Audit sink is asynchronous and best-effort
+
+**Context.** Domain events should be kept durably for audit, but a slow or unavailable database must not slow down or fail guest requests. There is no booking transaction in the database today: bookings are held by the mock provider.
+
+**Decision.**
+- `PostgresAuditSink` (`app/db/audit.py`) puts events on a bounded in-memory queue (10 000) and returns immediately.
+- A background thread inserts batches, one transaction per tenant with `SET LOCAL app.tenant_id` so row-level security applies.
+- Events dropped because the queue is full, or lost because a batch write failed, are counted in `audit_events_total{outcome}`.
+- The queue is flushed and the pool closed on shutdown.
+- `/ready` reports `audit_store` but does not require it.
+- `BookingConfirmed` uses a deterministic event id, so idempotent replays on any replica record one row.
+- This is deliberately not a transactional outbox.
+
+**Consequences.**
+- Guest latency does not depend on PostgreSQL.
+- Audit events can be lost: a full queue, a failed write, or a process that stops before flushing. That is acceptable for an audit trail and not for business records. Records that must never be lost belong in the booking transaction itself, which is designed and not implemented.
+- Events contain ids and counts only, never guest text. Old events are deleted by the retention job (`python -m app.db.retention`, `AUDIT_RETENTION_DAYS` 365).
+
+**Evidence.**
+- `tests/integration/test_postgres.py`: `test_audit_sink_writes_tenant_scoped_events`, `test_app_with_database_url_records_audit_events_and_reports_readiness`, `test_retention_purges_old_audit_events_and_expired_conversations_per_tenant`.
+- In the 3-container stack, the simultaneous booking probe (`scripts/replica_booking_probe.py`) recorded `BookingRequested` 3 times and `BookingConfirmed` once.

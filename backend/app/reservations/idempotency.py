@@ -2,14 +2,16 @@
 
 A retried `create_booking` with the same idempotency key and the same request returns the
 original booking instead of creating a second one. Reusing a key for a *different* request
-is rejected. Production would back this with a unique-constrained table in the booking
-database, written in the same transaction as the booking.
+is rejected. `RedisIdempotencyStore` (app.state.redis_backend) shares this across replicas; the
+`bookings` table's unique (tenant_id, hotel_id, idempotency_key) constraint is the durable backstop.
 """
 
 from collections.abc import Callable
 import threading
 import time
 from typing import Protocol, TypeVar
+
+from pydantic import BaseModel
 
 from ..core.versioning import content_hash
 from .models import ReservationError, ReservationErrorCode
@@ -18,7 +20,8 @@ T = TypeVar("T")
 
 
 class IdempotencyStore(Protocol):
-    def run_once(self, scope: str, key: str, request_fingerprint: object, operation: Callable[[], T]) -> T: ...
+    def run_once(self, scope: str, key: str, request_fingerprint: object, operation: Callable[[], T], result_model: type[BaseModel] | None = None) -> T:
+        """`result_model` lets shared stores (Redis) serialise the result; in-memory stores ignore it."""
 
 
 class InMemoryIdempotencyStore:
@@ -29,7 +32,7 @@ class InMemoryIdempotencyStore:
         self._ttl = ttl_seconds
         self._clock = clock
 
-    def run_once(self, scope: str, key: str, request_fingerprint: object, operation: Callable[[], T]) -> T:
+    def run_once(self, scope: str, key: str, request_fingerprint: object, operation: Callable[[], T], result_model: type[BaseModel] | None = None) -> T:
         if not key or len(key) < 8:
             raise ReservationError(ReservationErrorCode.INVALID_REQUEST, "An idempotency key of at least 8 characters is required.")
         full_key = f"{scope}:{key}"

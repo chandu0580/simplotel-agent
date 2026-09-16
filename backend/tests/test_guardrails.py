@@ -8,7 +8,7 @@ inventory, and unauthorized tool use.
 from app.assistant.guardrails import InputGuardrails
 from tests.conftest import GOA, answer_response, make_container, tool_response, turn_request
 
-SECRET = "sk-ant-api03-THIS-IS-A-TEST-SECRET-000000"
+SECRET = "sk-ant-api03-THIS-IS-A-TEST-SECRET-000000"  # scan-secrets: allow (fake fixture)
 
 
 def handle(container, message):

@@ -47,6 +47,7 @@ class ReservationErrorCode(StrEnum):
     NOT_SUPPORTED = "NOT_SUPPORTED"
     UNAVAILABLE = "UNAVAILABLE"  # provider down / timeout / circuit open
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    IN_PROGRESS = "IN_PROGRESS"  # same idempotency key is being processed by another request
 
 
 class ReservationError(Exception):

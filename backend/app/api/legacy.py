@@ -5,7 +5,6 @@ They behave as before (stateless chat with client-sent history) and add `Depreca
 """
 
 from fastapi import APIRouter, Request, Response
-from starlette.concurrency import run_in_threadpool
 
 from ..assistant.turn import TurnRequest
 from ..core.clock import local_today
@@ -42,21 +41,19 @@ def hotel_info(request: Request, response: Response):
 
 
 @router.post("/chat", response_model=ChatResponse, deprecated=True)
-async def chat(body: ChatRequest, request: Request, response: Response):
+def chat(body: ChatRequest, request: Request, response: Response):
     c = container_of(request)
     ctx = resolve_guest_context(request, c.tenants.default_hotel_id)
     enforce_rate_limits(request, ctx)
     _deprecate(response, f"/api/v1/hotels/{ctx.hotel_id}/conversations")
-    outcome = await run_in_threadpool(
-        c.assistant.handle, TurnRequest(tenant=ctx, message=body.message, history=body.history, booking_context=body.booking_context)
-    )
+    outcome = c.assistant.handle(TurnRequest(tenant=ctx, message=body.message, history=body.history, booking_context=body.booking_context))
     return ChatResponse(request_id=ctx.request_id, mode=outcome.mode, reply=outcome.reply, notice=outcome.notice)
 
 
 @router.post("/availability", response_model=AvailabilityResult, deprecated=True)
-async def availability(body: AvailabilityRequest, request: Request, response: Response):
+def availability(body: AvailabilityRequest, request: Request, response: Response):
     c = container_of(request)
     ctx = resolve_guest_context(request, c.tenants.default_hotel_id)
     enforce_rate_limits(request, ctx)
     _deprecate(response, f"/api/v1/hotels/{ctx.hotel_id}/availability")
-    return await run_in_threadpool(c.conversations.check_availability, ctx, None, AvailabilityQuery(**body.model_dump()))
+    return c.conversations.check_availability(ctx, None, AvailabilityQuery(**body.model_dump()))

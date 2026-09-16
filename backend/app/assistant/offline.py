@@ -7,13 +7,14 @@ pipeline (validation, timeout, audit) as model-requested calls.
 
 from datetime import date
 import re
+import time
 
 from ..core.tracing import AITrace
 from ..knowledge.retrieval import KeywordRetriever
 from ..schemas import AvailabilityResult, BookingContext, BookingPrefill, ChatReply, Source
-from ..tools.base import ToolContext, ToolErrorCode, ToolRegistry
+from ..tools.base import ToolContext, ToolRegistry
 from ..tools.builtin import NeedsDetails
-from .agent import availability_unavailable_reply
+from .agent import availability_unavailable_reply, dependency_reason
 from .turn import DependencyUnavailable, Turn
 
 # "Available"/"book" alone are too broad ("Is breakfast available?", "cancel my booking"),
@@ -69,7 +70,9 @@ class OfflineAssistant:
     def reply(self, turn: Turn, trace: AITrace) -> ChatReply:
         text = turn.message
         context = turn.request.booking_context
+        retrieval_started = time.perf_counter()
         evidence = self.retriever.retrieve(turn.kb, text)
+        trace.retrieval_latency_ms = round((time.perf_counter() - retrieval_started) * 1000, 3)
         trace.evidence_ids = evidence.ids
         best_score = evidence.evidence[0].score if evidence.evidence else 0
 
@@ -113,8 +116,8 @@ class OfflineAssistant:
         result = self.tools.execute("check_availability", args, ctx, invoked_by="system")
         trace.tool_calls.append(result.record("system"))
         if not result.ok:
-            if result.error_code in (ToolErrorCode.DEPENDENCY_UNAVAILABLE, ToolErrorCode.TIMEOUT):
-                raise DependencyUnavailable(availability_unavailable_reply(turn), "availability_unavailable")
+            if reason := dependency_reason(result.error_code):
+                raise DependencyUnavailable(availability_unavailable_reply(turn), reason)
             return self.fallback(turn)
         if isinstance(result.data, NeedsDetails):
             return ChatReply(type="collect_booking_details", text="Let's fix the booking details.", booking_prefill=prefill, form_error=result.data.form_error)

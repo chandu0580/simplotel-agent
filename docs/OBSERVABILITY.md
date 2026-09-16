@@ -1,8 +1,8 @@
 # Observability
 
-What the backend emits today, how to query it, and the proposed dashboards, alerts, product metrics and integrations built on it. Runbooks and SLOs are in [SRE.md](SRE.md).
+What the backend emits today, how to query it, and the proposed dashboards, alerts, product metrics and integrations built on it. Runbooks and SLOs are in [SRE.md](SRE.md). Configuration variables are in [CONFIGURATION.md](CONFIGURATION.md), data-handling rules in [PRIVACY.md](PRIVACY.md), and load-test latency figures in [PERFORMANCE.md](PERFORMANCE.md).
 
-> **Status.** No production traffic exists and the live Anthropic API has not been verified. There is no Grafana, Alertmanager, log backend or OpenTelemetry exporter today; dashboards, alerts and integrations below are **proposed designs**. Every threshold is a **Proposed target (not measured in production)**.
+> **Status.** No production traffic exists. The live Anthropic API is **NOT VERIFIED (no Anthropic credential)**; the default runtime provider is GLM, and GLM results are evidence for the GLM runtime only. There is no Grafana, Alertmanager, log backend or OpenTelemetry exporter today; dashboards, alerts and integrations below are **proposed designs**. Every threshold is a **Proposed target (not measured in production)**. The signals themselves (log events, trace fields, metrics) are **IMPLEMENTED**; §1.6 lists which are asserted by tests.
 
 ---
 
@@ -19,6 +19,7 @@ flowchart LR
   TS --> IMT[InMemoryTraceSink, 500]
   EP --> LEP[LoggingEventPublisher → domain_event log]
   EP --> IME[InMemoryEventPublisher, 500]
+  EP -.->|DATABASE_URL set| PG[PostgresAuditSink → audit_events table]
   M --> P[GET /metrics]
   LTS --> OUT[stdout JSON]
   LEP --> OUT
@@ -29,13 +30,21 @@ flowchart LR
 - **Format:** `LOG_FORMAT=json` (required when `APP_ENV=production`; the backend image sets it) or `text`. JSON keys: `ts`, `level`, `logger`, `message`, the context fields, all event fields merged at top level, and `exception` when present.
 - **Event name** is the `message` value for `log_event(...)` calls.
 - **Context fields**, bound per request via contextvars and copied into integration threads: `request_id`, `trace_id`, `tenant_id`, `hotel_id`, `conversation_id`, `channel`.
-- **Loggers:** `hotel_assistant.api`, `.service`, `.agent`, `.tools`, `.trace`, `.events`.
+- **Context propagation fix.** Guest endpoints are sync handlers, so they run in a worker thread with a *copy* of the request context. `bind_context` used to set a new dict in that copy, so ids bound during tenant resolution never reached the middleware, and the `http_request` access log lacked `tenant_id`, `hotel_id` and `conversation_id`. `bind_context` now updates the request's context dict in place, so ids bound inside worker threads appear on the access log. Asserted by `tests/test_observability.py::test_access_log_and_trace_carry_full_request_context`.
+- **Loggers:** `hotel_assistant.api`, `.service`, `.agent`, `.tools`, `.trace`, `.events`, `.knowledge`, `.state` (Redis), `.audit` (PostgreSQL sink), `.db` (migrations).
 
 | Event (`message`) | Logger | Fields |
 |---|---|---|
-| `http_request` | api | `method`, `route` (template), `status`, `latency_ms` |
-| `startup` | api | `app_env`, `llm_provider`, `model`, `prompt_version`, `hotels`, `auth_mode` |
+| `http_request` | api | `method`, `route` (template), `status`, `latency_ms`, plus the context fields including `tenant_id`, `hotel_id`, `conversation_id` when resolved |
+| `startup` | api | `app_env`, `llm_provider`, `model`, `prompt_version`, `hotels`, `auth_mode`, `worker_threads`, `state_backend` |
+| `shutdown_complete` | api | none; logged after the lifespan has flushed the audit sink and closed the LLM and Redis clients |
 | `conversations_purged` | api | `count` |
+| `knowledge_load_failed hotel_id=... error=...` (ERROR) | knowledge | exception class only; the request gets 503 `KNOWLEDGE_UNAVAILABLE` |
+| `state_backend_error error=...` (ERROR) | state | Redis error on the conversation store or locks; the request gets 503 `STATE_UNAVAILABLE` |
+| `rate_limiter_unavailable dimension=... error=...` (WARNING) | state | Redis error in the rate limiter; the request is allowed (fail open) |
+| `idempotency_store_unavailable error=...` (ERROR) | state | Redis error in the idempotency store; the booking is refused |
+| `lock_release_failed error=...` (WARNING) | state | the lease expires on its own |
+| `audit_write_failed events=... error=...` (ERROR) | audit | a batch of audit events was lost |
 | `unhandled_error path=...` | api | exception traceback (plain `logger.exception`) |
 | `llm_failure` (ERROR) | service | `reason`, `error` |
 | `ai_trace` | trace | all `AITrace` fields (§1.2) |
@@ -44,7 +53,7 @@ flowchart LR
 | `tool_crashed tool=...` | tools | exception traceback |
 | `trace_sink_failed sink=...` / `event_publish_failed publisher=...` | trace / events | exception; a broken sink never breaks a guest reply |
 
-**Redaction** (`RedactingFilter`, applied to message, args and fields): configured secret values (`ANTHROPIC_API_KEY`, admin token values, ≥ 8 chars) and patterns for `sk-`/`sk-ant-` keys, `Bearer` tokens, PEM private keys and `api_key|password|secret|authorization|token = value` pairs. Keys named `api_key`, `anthropic_api_key`, `authorization`, `password`, `secret`, `token`, `admin_api_tokens` are fully masked as `[REDACTED]`. `log_event` must never receive guest message text; no current call site passes it.
+**Redaction** (`RedactingFilter`, applied to message, args and fields): configured secret values (`LLM_API_KEY`, `ANTHROPIC_API_KEY`, admin token values, and the passwords inside `REDIS_URL` and `DATABASE_URL`, ≥ 8 chars) and patterns for `sk-`/`sk-ant-` keys, `Bearer` tokens, PEM private keys and `api_key|password|secret|authorization|token = value` pairs. Keys named `api_key`, `anthropic_api_key`, `authorization`, `password`, `secret`, `token`, `admin_api_tokens` are fully masked as `[REDACTED]`. `log_event` must never receive guest message text; no current call site passes it.
 
 ### 1.2 AI traces (`AITrace`, `app/core/tracing.py`)
 
@@ -63,26 +72,35 @@ One trace per guest turn, recorded even when the turn raises.
 | `tool_calls` | List of `ToolCallRecord`: `name`, `status` (`ok`/`error`), `latency_ms`, `error_code`, `invoked_by`, `arguments` (validated args, **read-only tools only**) |
 | `guardrails` | Interventions: `input_blocked`, `secret_leak`, `prompt_leak`, `unknown_source`, `uncited_answer`, `availability_claim`, `unsupported_price`, `unsupported_claim` (model-written form message with a price or inventory claim) |
 | `input_flags` | Input detections: `ignore_instructions`, `role_override`, `policy_override`, `tool_coercion`, `prompt_tag_injection`, `exfiltration_attempt` |
+| `pii_masked` | Kinds of personal data masked in the guest message before it reached the model, storage and the trace: `card`, `email`, `phone` (sorted, de-duplicated). Kinds only, never the values |
 | `stop_reason` | `end_turn`, `tool_use`, `max_tokens`, `refusal`, `other` |
 | `llm_latency_ms`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | LLM call data |
 | `mode` | `ai`, `offline`, `guardrail` |
 | `fallback_used`, `fallback_reason` | See reasons in §1.3 |
 | `reply_type` | `answer`, `clarification`, `fallback`, `availability`, `collect_booking_details` |
 | `success`, `error_type` | Outcome; `error_type` is an exception class name or fallback reason |
-| `total_latency_ms` | Whole turn inside `AssistantService.handle` |
+| `total_latency_ms` | Whole turn inside `AssistantService.handle` (integer ms) |
+| `knowledge_latency_ms` | Resolving the turn: tenant lookup, hotel profile and knowledge snapshot (sub-ms precision; mostly cache hits) |
+| `retrieval_latency_ms` | Selecting evidence from the snapshot, in the AI or offline engine |
+| `tool_latency_ms` | Sum of `tool_calls[].latency_ms` |
+| `app_latency_ms` | `max(total − llm_latency_ms − tool_latency_ms, 0)`: everything this service controls inside the turn (PII masking, knowledge snapshot and retrieval, prompt build, guardrails, validation). Conversation loading and saving happen outside `AssistantService.handle` and are only in `request_latency_ms` |
+
+Latency breakdown: `llm_latency_ms`, `tool_latency_ms` and `app_latency_ms` add up to `total_latency_ms` (within 1 ms of rounding, asserted by `test_latency_breakdown_separates_llm_tool_retrieval_and_app_time`). `knowledge_latency_ms` and `retrieval_latency_ms` are parts of `app_latency_ms`, not additional terms. The breakdown fields are set only on successful turns; a turn that raises carries `total_latency_ms` and `error_type`.
 
 There is no `decision` field. Derive it the way `evals/run_evals.py::decision_of` does: `mode=="guardrail"` → `blocked`; else the first `tool_calls[]` with `invoked_by=="model"` → its `name`; else `answer_guest` if `mode=="ai"`, otherwise `offline`.
 
 ### 1.3 Prometheus metrics (`app/core/metrics.py`)
 
-Exposed on `GET /metrics` (internal network only; nginx doesn't proxy it). A dedicated `CollectorRegistry` is used, so **no default `process_*`/`python_*` collectors are exported**; get CPU/memory from the container runtime. Histogram buckets (ms): `5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 45000`.
+Exposed on `GET /metrics` (internal network only; nginx doesn't proxy it, and `scripts/verify_stack.py` checks that it isn't reachable through the edge). A dedicated `CollectorRegistry` per container is used, so **no default `process_*`/`python_*` collectors are exported**; get CPU/memory from the container runtime. Each replica has its own registry: scrape every replica. Histogram buckets (ms): standard `5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 45000`; fine (for sub-millisecond work) `0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 250`.
+
+This table lists every metric defined in `app/core/metrics.py`.
 
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
 | `assistant_requests_total` | Counter | `channel` (`web`, `whatsapp`, `voice`, `api`) | Guest turns received |
 | `assistant_success_total` | Counter | `mode` (`ai`, `offline`) | Turns answered. Guardrail-blocked turns count under the mode that would have served them |
 | `assistant_failures_total` | Counter | `error_type` (exception class) | Turns that raised (→ HTTP error) |
-| `assistant_fallback_total` | Counter | `reason`: `ai_disabled`, `provider_status`, `provider_connection`, `provider_sdk`, `refusal`, `truncated`, `invalid_output`, `invalid_tool_call`, `availability_unavailable`, `unknown` | Turns with `fallback_used` |
+| `assistant_fallback_total` | Counter | `reason`: `ai_disabled`, `provider_timeout`, `provider_status`, `provider_connection`, `provider_sdk`, `provider_protocol`, `refusal`, `truncated`, `invalid_output`, `invalid_tool_call`, `tool_timeout`, `tool_unavailable`, `reservation_unavailable` (renamed from `availability_unavailable`), `unknown` | Turns with `fallback_used`. Every reason except `ai_disabled` also sets `meta.degradation` on the turn response |
 | `assistant_replies_total` | Counter | `reply_type`, `mode` | Replies by type |
 | `unsupported_question_total` | Counter | none | Replies of type `fallback` (includes outage and guardrail safe fallbacks, not just unsupported questions) |
 | `availability_search_total` | Counter | `source` (`assistant`, `form`), `available` (`true`, `false`) | Successful availability searches |
@@ -90,17 +108,26 @@ Exposed on `GET /metrics` (internal network only; nginx doesn't proxy it). A ded
 | `tool_failures_total` | Counter | `tool`, `error_code` (`ToolErrorCode` value) | Failed tool executions |
 | `guardrail_interventions_total` | Counter | `guardrail` | One increment per intervention name per turn |
 | `prompt_injection_signals_total` | Counter | `flag` (`ignore_instructions`, `role_override`, `policy_override`, `tool_coercion`, `prompt_tag_injection`, `exfiltration_attempt`) | Input guardrail flags, whether or not the message was blocked |
-| `rate_limited_total` | Counter | `dimension` (`ip`, `hotel`, `conversation`) | 429 rejections. `ip` is checked before hotel resolution and on admin endpoints; `conversation` is keyed `{hotel_id}:{conversation_id}` |
+| `pii_masked_total` | Counter | `kind` (`card`, `email`, `phone`) | Guest turns in which that kind of personal data was masked (one increment per kind per turn, not per occurrence) |
+| `rate_limited_total` | Counter | `dimension` (`ip_burst`, `ip`, `tenant`, `hotel`, `conversation`) | 429 rejections. `ip_burst` and `ip` are checked before hotel resolution and on admin endpoints; `conversation` is keyed `{hotel_id}:{conversation_id}` |
+| `state_backend_errors_total` | Counter | `component` (today only `rate_limiter`) | Redis errors that were handled by failing open. Conversation-store and lock errors are not counted here: they return 503 `STATE_UNAVAILABLE` and show up in `request_latency_ms{status_class="5xx"}` |
+| `conversation_conflicts_total` | Counter | none | Conversation saves rejected by the `version` compare-and-set (the request gets 409 `CONVERSATION_BUSY`) |
+| `audit_events_total` | Counter | `outcome` (`written`, `dropped`, `failed`) | PostgreSQL audit sink: events written; dropped because the bounded queue (10,000) was full; lost because a batch write failed. Absent when `DATABASE_URL` is not set |
 | `llm_tokens_total` | Counter | `kind` (`input`, `output`, `cache_read`, `cache_write`), `model` | LLM tokens; `model` lets cost be priced per model (bounded by configured routes) |
-| `llm_latency_ms` | Histogram | `provider` | LLM call latency |
-| `tool_latency_ms` | Histogram | `tool` | Tool latency, including validation and authorization |
-| `request_latency_ms` | Histogram | `route` (template or `unmatched`), `status_class` (`2xx`…`5xx`) | HTTP latency |
+| `llm_latency_ms` | Histogram (standard) | `provider` | LLM call latency |
+| `tool_latency_ms` | Histogram (standard) | `tool` | Tool latency, including validation and authorization |
+| `turn_latency_ms` | Histogram (standard) | `mode` (`ai`, `offline`, `guardrail`) | Total assistant turn latency (`AITrace.total_latency_ms`), successful turns only. Unlike `request_latency_ms`, it separates AI from offline turns |
+| `app_latency_ms` | Histogram (fine) | `mode` | Turn latency excluding LLM and tool time (`AITrace.app_latency_ms`), successful turns only |
+| `retrieval_latency_ms` | Histogram (fine) | none | Knowledge retrieval latency (`AITrace.retrieval_latency_ms`), successful turns only |
+| `request_latency_ms` | Histogram (standard) | `route` (template or `unmatched`), `status_class` (`2xx`…`5xx`) | HTTP latency |
+
+The `mode` label on `turn_latency_ms` and `app_latency_ms` is the trace mode (`guardrail` for input-blocked turns); on `assistant_success_total` and `assistant_replies_total` it is the display mode (`ai`/`offline`).
 
 **Cardinality by design:** no `tenant_id`, `hotel_id` or `conversation_id` labels. Thousands of hotels multiplied by every series would explode storage. Per-tenant views come from `domain_event` and `ai_trace` logs, which carry tenant context on every record (§2.2).
 
 ### 1.4 Domain events (`app/core/events.py`)
 
-Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversation_id`, `channel`, `data`. Logged as `domain_event`, and kept in memory (last 500). **Events never include guest message text or other personal data.**
+Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversation_id`, `channel`, `data`. Logged as `domain_event`, and kept in memory (last 500). When `DATABASE_URL` is set, events are also written to the PostgreSQL `audit_events` table by `PostgresAuditSink`: asynchronous bounded queue, one transaction per tenant with `SET LOCAL app.tenant_id` so row-level security applies, losses counted in `audit_events_total`, flushed and closed on shutdown. `BookingConfirmed` uses a deterministic event id, so idempotent replays record one row. Retention: `python -m app.db.retention` (`AUDIT_RETENTION_DAYS`, default 365). **Events never include guest message text or other personal data** (ids and counts only; tested in memory and in PostgreSQL).
 
 | `name` | Emitted by | `data` |
 |---|---|---|
@@ -119,7 +146,25 @@ Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversat
 
 - `X-Request-ID` is accepted if it matches `^[A-Za-z0-9._\-]{1,64}$`; otherwise a 16-hex id is generated. It is echoed in the response header and error bodies. nginx sets it to its own `$request_id`.
 - A W3C `traceparent` header (`00-<32hex>-<16hex>-<2hex>`) supplies `trace_id`; otherwise a random 32-hex id is used. **Only the trace-id is kept**: the parent span id is dropped and nothing is propagated outbound (LLM, PMS). CORS allows `traceparent` and `X-Request-ID`.
-- `POST .../messages` responses include `meta.trace_id`, `prompt_version`, `tool_schema_version`, `knowledge_version`, so a support ticket can be joined to its `ai_trace`.
+- `POST .../messages` responses include `meta.trace_id`, `prompt_version`, `tool_schema_version`, `knowledge_version` and `degradation` (`{code, message}` or null), so a support ticket can be joined to its `ai_trace`.
+- Error responses use the envelope `{"error": {"code", "message", "request_id", "details"}}`; `request_id` joins them to the `http_request` log line.
+
+### 1.6 What the tests assert
+
+| Signal | Assertion | Test |
+|---|---|---|
+| Access log context | `http_request` carries `tenant_id`, `hotel_id`, `conversation_id`, `trace_id`, route template and status; same `trace_id` as the `ai_trace` and the response `meta.trace_id`; a configured secret in the message is redacted | `tests/test_observability.py::test_access_log_and_trace_carry_full_request_context` |
+| AI trace completeness | `provider`, `model`, `prompt_version`, `tool_schema_version`, `knowledge_version`, `mode`, `reply_type`, `llm_latency_ms`, `total_latency_ms` populated | same; also `tests/test_platform.py::test_ai_trace_captures_versions_evidence_tools_and_tokens` |
+| Latency breakdown | `knowledge_latency_ms` and `retrieval_latency_ms` set, `tool_latency_ms == 0` without tools, `0 ≤ app < total`, `total ≈ llm + tool + app` within 1 ms; `turn_latency_ms{mode="ai"}`, `app_latency_ms{mode="ai"}`, `retrieval_latency_ms` and `llm_latency_ms{provider="mock"}` each observed once | `test_observability.py::test_latency_breakdown_separates_llm_tool_retrieval_and_app_time` |
+| Counters move | `assistant_requests_total{channel="web"}`, `assistant_fallback_total{reason="ai_disabled"}` and `{reason="reservation_unavailable"}`, `tool_calls_total{tool="check_availability",status="error"}`, `tool_failures_total{error_code="DEPENDENCY_UNAVAILABLE"}`, `rate_limited_total{dimension="conversation"}`, `request_latency_ms_count{route=".../availability",status_class="5xx"}` | `test_observability.py::test_counters_move_for_each_documented_signal` |
+| Counters move | `availability_search_total{source="form",available="true"}`, `assistant_failures_total{error_type="AttributeError"}` | `test_observability.py::test_successful_availability_and_errors_are_counted` |
+| PII masking | `AITrace.pii_masked == ["card", "email"]`, `pii_masked_total{kind="card"}` incremented, raw values absent from the model request and the stored conversation | `tests/test_privacy.py::test_model_storage_and_trace_never_see_the_raw_values` |
+| No high-cardinality labels | `/metrics` output contains no `tenant_id` or hotel id | `test_platform.py::test_metrics_are_recorded_and_exposed` |
+| Log redaction and context | JSON record has context fields; `sk-ant-…`, bearer token and configured secret removed | `test_platform.py::test_logs_are_structured_contextual_and_redacted` |
+| Events carry no guest text | serialised events contain no passport number or message words; PostgreSQL `audit_events` rows contain no guest text or phone digits | `test_platform.py::test_events_never_contain_guest_message_text`; `tests/integration/test_postgres.py::test_app_with_database_url_records_audit_events_and_reports_readiness` |
+| Rate limiter fail-open hook | a Redis error allows the request and calls the error callback (the callback that increments `state_backend_errors_total` is wired in `container.py`) | `tests/integration/test_redis_state.py::test_rate_limiter_fails_open_when_redis_is_down` |
+
+**Not asserted by any test:** the metric values of `state_backend_errors_total`, `conversation_conflicts_total` and `audit_events_total` (their code paths are exercised, but no test reads the counters), `pii_masked_total` for `email`/`phone`, and the `shutdown_complete` log (checked by grep in the CI docker job, which hasn't run on GitHub).
 
 ## 2. Dashboards (proposed)
 
@@ -136,6 +181,9 @@ Envelope: `event_id`, `name`, `occurred_at`, `tenant_id`, `hotel_id`, `conversat
 | Guardrail interventions by type | `sum by (guardrail) (increase(guardrail_interventions_total[1h]))` |
 | Tool success/failure | `sum by (tool, status) (rate(tool_calls_total[5m]))`; failures `sum by (tool, error_code) (increase(tool_failures_total[1h]))` |
 | Tool latency p95 | `histogram_quantile(0.95, sum by (le, tool) (rate(tool_latency_ms_bucket[5m])))` |
+| Turn latency by mode p95 | `histogram_quantile(0.95, sum by (le, mode) (rate(turn_latency_ms_bucket[5m])))` |
+| Application overhead p95 | `histogram_quantile(0.95, sum by (le, mode) (rate(app_latency_ms_bucket[5m])))`; retrieval: `histogram_quantile(0.95, sum by (le) (rate(retrieval_latency_ms_bucket[5m])))` |
+| PII masked by kind | `sum by (kind) (increase(pii_masked_total[1d]))` |
 | Decision distribution | Logs: `ai_trace` → derived `decision` (§1.2), count by decision per hour |
 | `prompt_version` rollout | Logs: `ai_trace` count by `prompt_version`, `model` over time; overlay fallback rate and guardrail count per version |
 | Injection signals by flag | `sum by (flag) (increase(prompt_injection_signals_total[1h]))`; per hotel from `GuardrailTriggered` events |
@@ -157,7 +205,7 @@ jq -r 'select(.message=="ai_trace")
 |---|---|
 | Guest questions | `sum(increase(assistant_requests_total[1d]))`; per tenant: `domain_event` `name=GuestQuestionAsked` count by `tenant_id`, `hotel_id` |
 | Availability searches | `sum by (source, available) (increase(availability_search_total[1d]))` |
-| Unsupported-question rate (upper bound) | `sum(rate(unsupported_question_total[1h])) / sum(rate(assistant_success_total[1h]))`. For the true rate, exclude `fallback_reason="availability_unavailable"` and fallback replies caused by guardrails, using `ai_trace` |
+| Unsupported-question rate (upper bound) | `sum(rate(unsupported_question_total[1h])) / sum(rate(assistant_success_total[1h]))`. For the true rate, exclude `fallback_reason` values `reservation_unavailable`, `tool_timeout`, `tool_unavailable` and the `provider_*`/model-output reasons, and fallback replies caused by guardrails, using `ai_trace` |
 | Reply type mix | `sum by (reply_type) (increase(assistant_replies_total[1d]))` |
 | Resolved-conversation proxy | Events, §4 |
 | Abandonment proxy | Events, §4 |
@@ -174,8 +222,11 @@ jq -r 'select(.message=="ai_trace")
 | Latency by route p95 | `histogram_quantile(0.95, sum by (le, route) (rate(request_latency_ms_bucket[5m])))` |
 | Thread-pool saturation | **Proposed metric** `executor_active_threads{pool="tool\|integration\|anyio"}` and `executor_queue_depth{pool}` (gauges sampled at scrape time) |
 | Circuit breaker state | **Proposed metric** `circuit_breaker_state{name}` (0 closed, 1 half-open, 2 open); until then, probe the `/ready` body `checks.reservations` (`degraded` = open) |
+| Shared-state errors (limiter failing open) | `sum by (component) (rate(state_backend_errors_total[5m]))` |
+| Conversation conflicts | `rate(conversation_conflicts_total[5m])`; 409s by route: `sum by (route) (rate(request_latency_ms_count{status_class="4xx"}[5m]))` (no per-status label) |
+| Audit trail health | `sum by (outcome) (rate(audit_events_total[5m]))` |
 | Container restarts | Orchestrator (`kube_pod_container_status_restarts_total`) or `docker inspect` `RestartCount`, proposed |
-| Readiness | Blackbox probe of `/ready`, proposed: status code (knowledge) **and** body `checks.reservations` |
+| Readiness | Blackbox probe of `/ready` per replica, proposed: status code (`knowledge`, `state`) **and** body `checks.reservations`, `checks.audit_store` |
 
 ## 3. Proposed alerts
 
@@ -195,7 +246,11 @@ All thresholds are **Proposed target (not measured in production)**. Severity pe
 | RateLimitMisfire | `sum(rate(rate_limited_total{dimension="ip"}[5m])) / sum(rate(request_latency_ms_count{route=~"/api/.*"}[5m])) > 0.1` | 10m | SEV3 | [Rate limits](SRE.md#runbook-rate-limit-misfires) |
 | TokenBurnAnomaly | `sum(rate(llm_tokens_total[1h])) > 2 * sum(rate(llm_tokens_total[1h] offset 7d))` | 1h | SEV3 | [LLM outage](SRE.md#runbook-llm-provider-outage-or-latency-spike) (cost) |
 | ScrapeDown | `up{job="hotel-assistant"} == 0` | 5m | SEV2 | [SRE §2](SRE.md#2-health-vs-readiness) |
-| KnowledgeNotReady | `/ready` returns 503 (`checks.knowledge == "failing"`) | 2m | SEV1 | [SRE §2](SRE.md#2-health-vs-readiness) |
+| KnowledgeNotReady | `/ready` returns 503 with `checks.knowledge == "failing"` (requests get 503 `KNOWLEDGE_UNAVAILABLE`) | 2m | SEV1 | [Knowledge / busy](SRE.md#runbook-knowledge-unavailable-or-conversation-busy-spikes) |
+| StateBackendDown | `/ready` returns 503 with `checks.state == "failing"` on any replica (requests get 503 `STATE_UNAVAILABLE`) | 1m | SEV1 | [Redis outage](SRE.md#runbook-redis-outage-state_backendredis) |
+| RateLimiterFailingOpen | `sum(rate(state_backend_errors_total{component="rate_limiter"}[5m])) > 0` | 5m | SEV2 | [Redis outage](SRE.md#runbook-redis-outage-state_backendredis) |
+| AuditEventsLost | `sum(increase(audit_events_total{outcome=~"dropped\|failed"}[15m])) > 0` or `/ready` body `checks.audit_store == "failing"` | 5m | SEV3 | [Audit store](SRE.md#runbook-postgresql-audit-store-degraded) |
+| ConversationConflictSpike | `rate(conversation_conflicts_total[10m]) > 5 * rate(conversation_conflicts_total[1d] offset 1d)` | 10m | SEV3 | [Knowledge / busy](SRE.md#runbook-knowledge-unavailable-or-conversation-busy-spikes) |
 
 Low-traffic caveat: ratio alerts need a minimum volume guard (e.g. `and sum(rate(assistant_requests_total[30m])) > 0.05`) to avoid paging on single turns.
 
@@ -230,9 +285,21 @@ All are computed from `domain_event` and `ai_trace` logs keyed by `conversation_
 | `meta.versions` | Distinct `{prompt, tool_schema, knowledge, model}` under test |
 | Per row | `decision`, `tool_calls`, `guardrails` (+ input flags), `evidence`, `cited`, `failures` |
 
-Reference points: offline CI eval passes 28/28. The development provider (GLM `glm-5.2`, **not Claude**) passed 33/34 and 34/34 in two runs on the current architecture, with per-scenario p50 ~2.6 s, p95 ~5.5 s and one 63 s outlier in an earlier run. No live Claude results exist yet.
+Suites: `--suite development` (`evals/scenarios.json`, 34 scenarios, used while writing prompts) and `--suite holdout` (`evals/holdout.json`, 12 adversarial scenarios written afterwards and never used for tuning). Each scenario has a `critical` flag; `--fail-on-critical` exits 4 if a critical scenario fails, and `--baseline` exits 3 and lists critical regressions.
 
-**Trending (proposed):** after each CI offline run and each manual `ai-eval.yml` run, append `summary` + `meta.versions` + git SHA to a time series (a CSV/JSON file in an artifact bucket, or push as Prometheus gauges such as `eval_pass_ratio{label,tag,prompt_version,model}` via Pushgateway). Plot pass rate by tag, `served_by_ai` and latency p95 against `prompt_version` and `model`. A drop in `served_by_ai` or `decision_accuracy` blocks a prompt/model rollout (see [SRE §8](SRE.md#8-release-safety)). Always label non-Anthropic runs (`--label glm-dev-...`) so they're never mistaken for Claude results.
+Reference points (local runs; CI has not run on GitHub):
+
+| Run | Result | Latency p50 / p95 |
+|---|---|---|
+| Offline engine, development suite | 28/28 (6 AI-only skipped), critical 14/14 | n/a |
+| Offline engine, holdout suite | 12/12, critical 10/10 | n/a |
+| GLM adapter `glm-5.2`, development suite, run 1 | 34/34; served_by_ai 33/34 (the 34th, `model-failure-fallback`, simulates an outage on purpose); groundedness 13/13; decision accuracy 18/18 | 5511 / 12620 ms |
+| GLM adapter, development suite, run 2 | 34/34; groundedness 14/14; decision accuracy 18/18 | 5593 / 14280 ms |
+| GLM adapter, holdout suite | 12/12, critical 10/10, served_by_ai 12/12 | 5820 / 9948 ms |
+
+GLM results are evidence for the GLM runtime only, **not Claude**. The Anthropic live API is **NOT VERIFIED (no Anthropic credential)**. Details in [EVALUATION.md](EVALUATION.md).
+
+**Trending (proposed):** after each CI offline run and each manual `live-ai-eval.yml` run, append `summary` + `meta.versions` + git SHA to a time series (a CSV/JSON file in an artifact bucket, or push as Prometheus gauges such as `eval_pass_ratio{label,tag,prompt_version,model}` via Pushgateway). Plot pass rate by tag, `served_by_ai` and latency p95 against `prompt_version` and `model`. A drop in `served_by_ai` or `decision_accuracy` blocks a prompt/model rollout (see [SRE §8](SRE.md#8-release-safety)). Always label non-Anthropic runs (`--label glm-dev-...`) so they're never mistaken for Claude results.
 
 ## 6. Integration path (proposed)
 
@@ -247,11 +314,12 @@ Reference points: offline CI eval passes 28/28. The development provider (GLM `g
 
 **PII and secrets in telemetry:**
 - Guest message text is never logged, traced or evented; `GuestQuestionAsked` carries only `message_length`.
+- Before a guest message reaches the model, the stored transcript or a trace, Luhn-valid card numbers are always masked, and emails and phone numbers are masked when `PII_MASK_CONTACT_DETAILS=true` (default). Traces record only the masked kinds (`pii_masked`). Names and addresses are not detected. See [PRIVACY.md](PRIVACY.md).
 - `ai_trace.tool_calls[].arguments` holds dates and guest counts for read-only tools; mutating-tool arguments are never recorded.
 - `tool_audit.principal` can be a guest reference once guest auth exists. Treat it as personal data (hash it before export).
 - `llm_failure.error` includes provider error text; it passes through redaction but should not go to third-party tools unfiltered.
-- Client IPs are used for rate limiting but not logged by `http_request`.
-- Conversation content lives only in process memory (24 h TTL).
+- Client IPs are used for rate limiting but not logged by `http_request`. In Redis, rate-limit keys contain a SHA-256 digest of the IP, not the IP itself.
+- Conversation content lives only in process memory or Redis (24 h TTL), never in PostgreSQL today.
 
 **Retention (proposed):**
 

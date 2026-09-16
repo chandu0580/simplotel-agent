@@ -12,7 +12,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..core.errors import LEGACY_CODES, AppError, ErrorCode
 
-_STATUS_CODES = {401: ErrorCode.AUTHENTICATION_REQUIRED, 403: ErrorCode.FORBIDDEN, 404: ErrorCode.NOT_FOUND, 429: ErrorCode.RATE_LIMITED}
+_STATUS_CODES = {
+    401: ErrorCode.UNAUTHORIZED,
+    403: ErrorCode.FORBIDDEN,
+    404: ErrorCode.NOT_FOUND,
+    405: ErrorCode.METHOD_NOT_ALLOWED,
+    413: ErrorCode.PAYLOAD_TOO_LARGE,
+    429: ErrorCode.RATE_LIMITED,
+}
 
 
 def is_legacy_path(path: str) -> bool:
@@ -42,5 +49,5 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
-        code = _STATUS_CODES.get(exc.status_code, ErrorCode.NOT_FOUND if exc.status_code < 500 else ErrorCode.INTERNAL_ERROR)
+        code = _STATUS_CODES.get(exc.status_code, ErrorCode.VALIDATION_ERROR if exc.status_code < 500 else ErrorCode.INTERNAL_ERROR)
         return error_response(request, exc.status_code, code, str(exc.detail))

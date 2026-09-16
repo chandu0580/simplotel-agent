@@ -16,8 +16,11 @@ RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app 
 WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --chown=root:root app ./app
+COPY --chown=root:root migrations ./migrations
 USER 10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
   CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]
+# SIGTERM: uvicorn stops accepting, drains in-flight requests (up to 25 s), then runs the lifespan shutdown.
+STOPSIGNAL SIGTERM
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header", "--timeout-graceful-shutdown", "25"]

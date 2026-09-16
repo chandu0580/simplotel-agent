@@ -29,6 +29,7 @@ class Conversation(BaseModel):
     created_at: datetime
     updated_at: datetime
     expires_at: datetime
+    version: int = 0  # incremented on every save; used for compare-and-set across replicas
     messages: list[StoredMessage] = Field(default_factory=list)
     active_intent: Literal["information", "availability"] | None = None
     availability_context: BookingContext | None = None

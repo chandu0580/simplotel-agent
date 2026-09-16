@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { api, ApiError, type ApiErrorKind } from '../api/client'
-import type { AvailabilityRequest, AvailabilityResult, BookingDetails, ChatReply } from '../api/types'
+import type { AvailabilityRequest, AvailabilityResult, BookingDetails, ChatReply, ConversationTurnResponse } from '../api/types'
 
 export type UIMessage =
   | { id: string; kind: 'user'; text: string }
@@ -80,7 +80,16 @@ export function useChat(locale: string) {
       pendingRef.current = true
       setPending(true)
       try {
-        const response = await withConversation((id) => api.sendMessage(id, text, locale))
+        const sendOnce = () => withConversation((id) => api.sendMessage(id, text, locale))
+        let response: ConversationTurnResponse
+        try {
+          response = await sendOnce()
+        } catch (err) {
+          // The previous message (another tab, a double submit) is still being answered: wait as the server asks, capped, and retry once.
+          if (!(err instanceof ApiError && err.kind === 'busy')) throw err
+          await new Promise((resolve) => setTimeout(resolve, Math.min(err.retryAfterSeconds ?? 2, 3) * 1000))
+          response = await sendOnce()
+        }
         const { reply } = response
         if (reply.availability) bookingRef.current = bookingFromResult(reply.availability)
         else if (reply.booking_prefill) {

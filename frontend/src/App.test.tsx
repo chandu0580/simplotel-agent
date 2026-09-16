@@ -353,3 +353,84 @@ describe('Localisation, branding and connectivity', () => {
     await waitFor(() => expect(screen.queryByText(/You're offline/)).not.toBeInTheDocument())
   })
 })
+
+describe('Hardening against API failures and unexpected responses', () => {
+  it('retries once, automatically, when the conversation is busy', async () => {
+    const calls = mockApi({
+      messages: [
+        () => json(409, { error: { code: 'CONVERSATION_BUSY', message: 'busy', request_id: 'r' } }, { 'Retry-After': '0' }),
+        () => json(200, turn({ text: 'Check-in is from 2 PM.' })),
+      ],
+    })
+    renderApp()
+
+    await ask('Check-in time?')
+
+    expect(await screen.findByText('Check-in is from 2 PM.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(messageCalls(calls)).toHaveLength(2)
+  })
+
+  it('explains a temporary outage (503) and offers a retry', async () => {
+    mockApi({ messages: [() => json(503, { error: { code: 'STATE_UNAVAILABLE', message: 'internal detail', request_id: 'r' } }, { 'Retry-After': '5' })] })
+    renderApp()
+
+    await ask('hello')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('temporarily unavailable')
+    expect(alert).not.toHaveTextContent('internal detail')
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  it('survives a 200 response with an unexpected body (e.g. a proxy page)', async () => {
+    mockApi({
+      messages: [
+        () => new Response('<html>Gateway</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+        () => json(200, { unexpected: true }),
+      ],
+    })
+    renderApp()
+
+    const user = await ask('hello')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on our side')
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong on our side'))
+  })
+
+  it('shows a timeout message when the request is aborted', async () => {
+    mockApi({ messages: [() => Promise.reject(new DOMException('aborted', 'AbortError'))] })
+    renderApp()
+
+    await ask('hello')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('taking too long')
+  })
+
+  it('does not offer a pointless retry for a message the server rejects as too large', async () => {
+    mockApi({ messages: [() => json(413, { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too big', request_id: 'r' } })] })
+    renderApp()
+
+    await ask('hello')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('too long')
+    expect(within(alert).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
+  it('caps input length and renders very long replies and degradation metadata without breaking', async () => {
+    const longText = 'Breakfast details. '.repeat(150)
+    mockApi({
+      messages: [
+        () => json(200, turn({ text: longText }, { mode: 'offline', meta: { trace_id: 't', prompt_version: null, tool_schema_version: null, knowledge_version: 'k', degradation: { code: 'LLM_TIMEOUT', message: 'slow model' } } })),
+      ],
+    })
+    renderApp()
+
+    const input = screen.getByLabelText('Ask a question') as HTMLTextAreaElement
+    expect(input.maxLength).toBe(1000)
+    await ask('Breakfast?')
+
+    expect(await screen.findByText((content) => content.startsWith('Breakfast details.'))).toBeInTheDocument()
+  })
+})

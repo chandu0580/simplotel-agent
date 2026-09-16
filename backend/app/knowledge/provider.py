@@ -7,6 +7,7 @@ implement the same three methods.
 
 from datetime import date
 import json
+import logging
 from pathlib import Path
 from typing import Protocol
 
@@ -14,6 +15,8 @@ from ..core.cache import Cache
 from ..core.errors import AppError, ErrorCode
 from ..core.versioning import content_hash
 from .models import HotelProfile, KnowledgeBase, KnowledgeEntry, Room
+
+logger = logging.getLogger("hotel_assistant.knowledge")
 
 
 class KnowledgeProvider(Protocol):
@@ -91,9 +94,13 @@ class JsonKnowledgeProvider:
         path = self._hotel_path(hotel_id)
         if not path.exists():
             raise AppError(ErrorCode.HOTEL_NOT_FOUND, "Hotel not found.", 404)
-        parsed = parse_hotel_file(path)
-        if parsed[0].id != hotel_id:
-            raise ValueError(f"{path} declares hotel id {parsed[0].id!r}, expected {hotel_id!r}")
+        try:
+            parsed = parse_hotel_file(path)
+            if parsed[0].id != hotel_id:
+                raise ValueError(f"{path} declares hotel id {parsed[0].id!r}, expected {hotel_id!r}")
+        except (OSError, ValueError) as exc:  # includes JSON and validation errors
+            logger.error("knowledge_load_failed hotel_id=%s error=%s", hotel_id, type(exc).__name__)
+            raise AppError(ErrorCode.KNOWLEDGE_UNAVAILABLE, "Hotel information is temporarily unavailable.", 503, headers={"Retry-After": "30"}) from exc
         self.cache.set(key, parsed, self.ttl)
         return parsed
 

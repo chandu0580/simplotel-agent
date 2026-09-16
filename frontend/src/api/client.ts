@@ -11,7 +11,17 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.repl
 export const HOTEL_ID = (import.meta.env.VITE_HOTEL_ID as string | undefined) ?? 'hotel-goa-001'
 export const REQUEST_TIMEOUT_MS = 45_000
 
-export type ApiErrorKind = 'network' | 'timeout' | 'validation' | 'rate_limited' | 'not_found' | 'unavailable' | 'server'
+export type ApiErrorKind =
+  | 'network'
+  | 'timeout'
+  | 'validation'
+  | 'rate_limited'
+  | 'busy'
+  | 'too_large'
+  | 'not_found'
+  | 'unavailable'
+  | 'unexpected'
+  | 'server'
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind
@@ -35,7 +45,7 @@ export class ApiError extends Error {
   }
 
   get retryable(): boolean {
-    return this.kind !== 'validation' && this.kind !== 'not_found'
+    return this.kind !== 'validation' && this.kind !== 'not_found' && this.kind !== 'too_large'
   }
 }
 
@@ -43,7 +53,28 @@ interface ErrorEnvelope {
   error?: { code?: string; message?: string; request_id?: string }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/** Rejects bodies that don't have the shape the UI renders (proxy error pages, version skew). */
+export type Validator<T> = (body: unknown) => body is T
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+
+export const isTurnResponse: Validator<ConversationTurnResponse> = (b): b is ConversationTurnResponse =>
+  isObject(b) &&
+  typeof b.conversation_id === 'string' &&
+  (b.mode === 'ai' || b.mode === 'offline') &&
+  isObject(b.reply) &&
+  typeof b.reply.type === 'string' &&
+  typeof b.reply.text === 'string' &&
+  Array.isArray(b.reply.sources) &&
+  Array.isArray(b.reply.suggestions)
+
+const isConversationCreated: Validator<ConversationCreated> = (b): b is ConversationCreated =>
+  isObject(b) && typeof b.conversation_id === 'string'
+const isHotelInfo: Validator<HotelInfo> = (b): b is HotelInfo => isObject(b) && isObject(b.hotel) && typeof b.hotel.name === 'string'
+const isAvailability: Validator<AvailabilityResult> = (b): b is AvailabilityResult =>
+  isObject(b) && typeof b.available === 'boolean' && Array.isArray(b.rooms) && typeof b.message === 'string'
+
+async function request<T>(path: string, init: RequestInit = {}, validate?: Validator<T>): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let response: Response
@@ -64,7 +95,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (response.status === 204) return undefined as T
   const body = (await response.json().catch(() => null)) as (T & ErrorEnvelope) | null
-  if (response.ok && body) return body
+  if (response.ok) {
+    if (body && (!validate || validate(body))) return body
+    throw new ApiError('unexpected', 'unexpected', { status: response.status })
+  }
 
   const code = body?.error?.code
   const opts = { status: response.status, code, requestId: body?.error?.request_id ?? response.headers.get('X-Request-ID') ?? undefined }
@@ -75,6 +109,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError('rate_limited', 'rate_limited', { ...opts, retryAfterSeconds: Number(response.headers.get('Retry-After') ?? 5) })
   }
   if (response.status === 404) throw new ApiError('not_found', 'not_found', opts)
+  if (response.status === 409) {
+    throw new ApiError('busy', 'busy', { ...opts, retryAfterSeconds: Number(response.headers.get('Retry-After') ?? 2) })
+  }
+  if (response.status === 413) throw new ApiError('too_large', 'too_large', opts)
   if (response.status === 503) throw new ApiError('unavailable', 'unavailable', opts)
   throw new ApiError('server', 'server', opts)
 }
@@ -82,17 +120,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 const hotelPath = `/api/v1/hotels/${encodeURIComponent(HOTEL_ID)}`
 
 export const api = {
-  hotel: () => request<HotelInfo>(hotelPath),
+  hotel: () => request<HotelInfo>(hotelPath, {}, isHotelInfo),
   createConversation: (locale: string) =>
-    request<ConversationCreated>(`${hotelPath}/conversations`, { method: 'POST', body: JSON.stringify({ locale }) }),
+    request<ConversationCreated>(`${hotelPath}/conversations`, { method: 'POST', body: JSON.stringify({ locale }) }, isConversationCreated),
   sendMessage: (conversationId: string, message: string, locale: string) =>
     request<ConversationTurnResponse>(`${hotelPath}/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: 'POST',
       body: JSON.stringify({ message, locale }),
-    }),
+    }, isTurnResponse),
   checkAvailability: (conversationId: string, payload: AvailabilityRequest) =>
     request<AvailabilityResult>(`${hotelPath}/conversations/${encodeURIComponent(conversationId)}/availability`, {
       method: 'POST',
       body: JSON.stringify(payload),
-    }),
+    }, isAvailability),
 }

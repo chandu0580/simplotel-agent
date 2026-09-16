@@ -157,6 +157,8 @@ def test_example_env_file_parses_to_safe_defaults():
     from app.core.config import Settings
 
     settings = Settings.from_env(dict(dotenv_values(Path(__file__).resolve().parents[1] / ".env.example")))
-    assert settings.anthropic_api_key is None and not settings.llm_configured
+    assert settings.llm_provider == "glm" and settings.llm_api_key is None and settings.anthropic_api_key is None and not settings.llm_configured
+    assert settings.state_backend == "memory" and settings.redis_url is None and settings.database_url is None
+    assert settings.pii_mask_contact_details and settings.worker_threads == 150
     assert settings.model_fast == settings.model_primary and settings.admin_api_tokens == ""
     assert settings.auth_mode == "disabled" and settings.feature_flags == {}

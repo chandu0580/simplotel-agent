@@ -154,8 +154,14 @@ class PostMessageRequest(StrictModel):
         return v.strip()
 
 
+class Degradation(BaseModel):
+    code: str  # LLM_TIMEOUT | LLM_UNAVAILABLE | TOOL_TIMEOUT | TOOL_UNAVAILABLE | RESERVATION_UNAVAILABLE
+    message: str
+
+
 class ResponseMeta(BaseModel):
     trace_id: str
+    degradation: Degradation | None = None
     prompt_version: str | None = None
     tool_schema_version: str | None = None
     knowledge_version: str | None = None

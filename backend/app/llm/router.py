@@ -34,15 +34,16 @@ class ModelRouter:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ModelRouter":
-        primary = ModelRoute(settings.model_primary, settings.effort, settings.llm_max_tokens)
-        fast = ModelRoute(settings.model_fast, "low", 2048)
+        effort = settings.effort if settings.llm_provider == "anthropic" else None  # effort is an Anthropic parameter
+        primary = ModelRoute(settings.model_primary, effort, settings.llm_max_tokens)
+        fast = ModelRoute(settings.model_fast, "low" if effort else None, 2048)
         return cls(
             {
                 ModelTask.GUEST_TURN: primary,
                 ModelTask.INTENT_CLASSIFICATION: fast,
                 ModelTask.CONVERSATION_SUMMARY: fast,
                 # Judges must be at least as capable as the model they grade.
-                ModelTask.EVAL_JUDGE: ModelRoute(settings.model_primary, "high", 4096),
+                ModelTask.EVAL_JUDGE: ModelRoute(settings.model_primary, "high" if effort else None, 4096),
             }
         )
 

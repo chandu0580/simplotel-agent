@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "label": "LOCAL BENCHMARK, NOT PRODUCTION CAPACITY",
+    "machine": "Windows 11, 4 cores / 8 threads, 15.3 GiB RAM",
+    "python": "3.13.3",
+    "server": "uvicorn, 1 worker, 150 worker threads, in-memory state, rate limits off, client on the same machine",
+    "seconds_per_level": 20.0,
+    "mock_llm_latency_ms": 1500,
+    "cpu_note": "server_cpu_* is psutil process CPU; 100% = one full core"
+  },
+  "rows": [
+    {
+      "users": 50,
+      "requests": 657,
+      "duration_s": 21.4,
+      "rps": 30.8,
+      "p50_ms": 1534.4,
+      "p95_ms": 1679.4,
+      "p99_ms": 1768.2,
+      "max_ms": 1790.1,
+      "error_rate": 0.0,
+      "statuses": {
+        "200": 657
+      },
+      "server_cpu_avg_pct": 23.0,
+      "server_cpu_max_pct": 79.3,
+      "server_rss_max_mb": 100.7,
+      "scenario": "mock_ai_turn"
+    },
+    {
+      "users": 100,
+      "requests": 1070,
+      "duration_s": 21.5,
+      "rps": 49.8,
+      "p50_ms": 1522.1,
+      "p95_ms": 5299.8,
+      "p99_ms": 7040.8,
+      "max_ms": 7489.3,
+      "error_rate": 0.0,
+      "statuses": {
+        "200": 1070
+      },
+      "server_cpu_avg_pct": 32.4,
+      "server_cpu_max_pct": 81.2,
+      "server_rss_max_mb": 112.8,
+      "scenario": "mock_ai_turn"
+    }
+  ]
+}

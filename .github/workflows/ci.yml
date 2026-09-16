@@ -1,5 +1,8 @@
 name: CI
 
+# Never needs an LLM credential: every job runs offline, against mocks, or with AI disabled.
+# Live model evaluation is a separate, manual workflow (live-ai-eval.yml).
+
 on:
   push:
     branches: [main, master]
@@ -15,6 +18,7 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -28,15 +32,63 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check app tests evals scripts perf
-      - name: Unit, integration, contract and security tests
+      - name: Unit, contract, security and API tests (integration tests skip without services)
         run: python -m pytest
       - name: Offline AI evaluation (regression gate against the committed baseline)
         run: python -m evals.run_evals --mode offline --label ci-offline --baseline evals/results/offline.json
       - name: Dependency audit
         run: pip install pip-audit && pip-audit -r requirements.txt
 
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-throwaway
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Redis state, three-replica behaviour, PostgreSQL migrations, RLS and audit
+        env:
+          TEST_REDIS_URL: redis://localhost:6379/0
+          TEST_DATABASE_URL: postgresql://ci:ci-only-throwaway@localhost:5432/postgres  # scan-secrets: allow (throwaway CI service)
+        run: python -m pytest tests/integration -rs
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Secret scan of every tracked file
+        run: python backend/scripts/scan_secrets.py --git
+      - name: No environment files committed
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$'; then echo "environment file committed"; exit 1; fi
+
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -54,12 +106,15 @@ jobs:
         run: npm run build
       - name: Component tests
         run: npm test
+      - name: No credentials in the production bundle
+        run: python3 ../backend/scripts/scan_secrets.py dist
       - name: Dependency audit
         run: npm audit --omit=dev --audit-level=high
 
   e2e:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,15 +133,49 @@ jobs:
         working-directory: frontend
 
   docker:
-    needs: [backend, frontend]
+    needs: [backend, frontend, integration]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: simplotel-agent  # stable image names regardless of the checkout directory
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install httpx==0.28.1
       - name: Build images
         run: docker compose build
-      - name: Smoke test the stack
+      - name: Images run as non-root and carry no credentials
+        run: |
+          test "$(docker image inspect simplotel-agent-backend --format '{{.Config.User}}')" = "10001"
+          test "$(docker image inspect simplotel-agent-frontend --format '{{.Config.User}}')" != ""
+          cid=$(docker create simplotel-agent-backend) && docker export "$cid" > backend-fs.tar && docker rm "$cid"
+          python backend/scripts/scan_secrets.py --tar backend-fs.tar
+          ! tar -tf backend-fs.tar | grep -E '(^|/)\.env$'
+      - name: Single-instance stack (memory state)
         run: |
           docker compose up -d --wait
-          curl -fsS http://localhost:8080/api/v1/hotels/hotel-goa-001 > /dev/null
-          curl -fsS -X POST -H "Content-Type: application/json" -d "{}" http://localhost:8080/api/v1/hotels/hotel-goa-001/conversations
+          python -m scripts.verify_stack
           docker compose down
+        working-directory: backend
+        env:
+          COMPOSE_FILE: ../docker-compose.yml
+      - name: Three replicas with Redis and PostgreSQL
+        working-directory: backend
+        run: |
+          export SA_DB_OWNER_PASSWORD=$(openssl rand -hex 16) SA_DB_APP_PASSWORD=$(openssl rand -hex 16)
+          export COMPOSE_FILE=../docker-compose.yml:../docker-compose.scale.yml
+          docker compose up -d --wait
+          python -m scripts.verify_stack --expect-shared-state
+          key="idem-ci-$GITHUB_RUN_ID" start=$(( $(date +%s) + 8 ))
+          for i in 1 2 3; do
+            docker compose exec -T -e FEATURE_BOOKING_TOOLS_ENABLED=true -e LOG_LEVEL=ERROR --index $i backend python - "$key" "$start" < scripts/replica_booking_probe.py > probe-$i.txt &
+          done
+          wait
+          cat probe-*.txt
+          test "$(cat probe-*.txt | grep -o 'booking_id=[A-Z0-9-]*' | sort -u | wc -l)" = "1"
+          test "$(grep -c 'created_here=True' probe-*.txt | awk -F: '{s+=$2} END {print s}')" = "1"
+          docker compose stop -t 30 backend
+          docker compose logs backend | grep -c shutdown_complete
+          docker compose down -v

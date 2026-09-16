@@ -1,0 +1,70 @@
+# Multi-replica local stack: 3 backend replicas sharing Redis state, plus PostgreSQL for the audit trail.
+#
+#   export SA_DB_OWNER_PASSWORD=...  SA_DB_APP_PASSWORD=...     (any local values; never commit them)
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
+#
+# nginx resolves "backend" to every replica and round-robins requests across them.
+# Redis and PostgreSQL publish no host ports; they are reachable only on the compose network.
+# This is a local rehearsal of the proposed topology, not a production deployment.
+services:
+  redis:
+    image: redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    read_only: true
+    tmpfs: [/data]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    environment:
+      POSTGRES_USER: simplotel_owner
+      POSTGRES_PASSWORD: ${SA_DB_OWNER_PASSWORD:?set SA_DB_OWNER_PASSWORD}
+      POSTGRES_DB: simplotel
+      SA_DB_APP_PASSWORD: ${SA_DB_APP_PASSWORD:?set SA_DB_APP_PASSWORD}
+    volumes:
+      - ./backend/deploy/postgres-init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simplotel_owner -d simplotel"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  migrate:
+    build: ./backend
+    command: ["python", "-m", "app.db.migrate"]
+    environment:
+      DATABASE_URL: postgresql://simplotel_owner:${SA_DB_OWNER_PASSWORD}@postgres:5432/simplotel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: "no"
+
+  backend:
+    environment:
+      STATE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      # The application connects as a non-superuser role so row-level security applies.
+      DATABASE_URL: postgresql://simplotel_app:${SA_DB_APP_PASSWORD}@postgres:5432/simplotel
+    deploy:
+      replicas: 3
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

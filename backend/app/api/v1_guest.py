@@ -1,9 +1,9 @@
 """Public guest API (v1). Hotel-scoped; unauthenticated by design; rate limited."""
 
 from fastapi import APIRouter, Request, Response
-from starlette.concurrency import run_in_threadpool
 
 from ..core.clock import local_today
+from ..core.errors import DEGRADATION_CODES
 from ..reservations.models import AvailabilityQuery
 from ..schemas import (
     AvailabilityRequest,
@@ -12,6 +12,7 @@ from ..schemas import (
     ConversationTurnResponse,
     ConversationView,
     CreateConversationRequest,
+    Degradation,
     MessageView,
     PostMessageRequest,
     ResponseMeta,
@@ -20,6 +21,20 @@ from ..schemas import (
 from .deps import container_of, enforce_rate_limits, resolve_guest_context
 
 router = APIRouter(prefix="/api/v1/hotels/{hotel_id}", tags=["guest v1"], responses={404: {"model": V1ErrorResponse}, 422: {"model": V1ErrorResponse}, 429: {"model": V1ErrorResponse}})
+
+DEGRADATION_MESSAGES = {
+    "LLM_TIMEOUT": "The AI model did not respond in time; the answer came from the hotel FAQ.",
+    "LLM_UNAVAILABLE": "The AI model was unavailable or returned an unusable reply; the answer came from the hotel FAQ.",
+    "TOOL_TIMEOUT": "A booking system call timed out.",
+    "TOOL_UNAVAILABLE": "A booking system call failed.",
+    "RESERVATION_UNAVAILABLE": "Live availability is temporarily unavailable.",
+}
+
+
+def degradation_for(reason: str | None) -> Degradation | None:
+    code = DEGRADATION_CODES.get(reason or "")
+    return Degradation(code=code.value, message=DEGRADATION_MESSAGES[code.value]) if code else None
+
 
 SUGGESTED_QUESTIONS = [
     "What time is check-in?",
@@ -87,12 +102,12 @@ def delete_conversation(hotel_id: str, conversation_id: str, request: Request):
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ConversationTurnResponse)
-async def post_message(hotel_id: str, conversation_id: str, body: PostMessageRequest, request: Request):
+def post_message(hotel_id: str, conversation_id: str, body: PostMessageRequest, request: Request):
+    # Sync endpoint: FastAPI runs it in the worker thread pool, so the LLM call and the rate-limit/state
+    # round trips (Redis in multi-replica mode) never block the event loop.
     ctx = resolve_guest_context(request, hotel_id)
     enforce_rate_limits(request, ctx, conversation_id)
-    service = container_of(request).conversations
-    # The LLM client is synchronous; keep it off the event loop.
-    conversation, outcome = await run_in_threadpool(service.post_message, ctx, conversation_id, body.message, body.locale)
+    conversation, outcome = container_of(request).conversations.post_message(ctx, conversation_id, body.message, body.locale)
     t = outcome.trace
     return ConversationTurnResponse(
         request_id=ctx.request_id,
@@ -100,24 +115,28 @@ async def post_message(hotel_id: str, conversation_id: str, body: PostMessageReq
         mode=outcome.mode,
         reply=outcome.reply,
         notice=outcome.notice,
-        meta=ResponseMeta(trace_id=t.trace_id, prompt_version=t.prompt_version, tool_schema_version=t.tool_schema_version, knowledge_version=t.knowledge_version),
+        meta=ResponseMeta(
+            trace_id=t.trace_id,
+            prompt_version=t.prompt_version,
+            tool_schema_version=t.tool_schema_version,
+            knowledge_version=t.knowledge_version,
+            degradation=degradation_for(t.fallback_reason),
+        ),
     )
 
 
 @router.post("/conversations/{conversation_id}/availability", response_model=AvailabilityResult, responses={503: {"model": V1ErrorResponse}})
-async def conversation_availability(hotel_id: str, conversation_id: str, body: AvailabilityRequest, request: Request):
+def conversation_availability(hotel_id: str, conversation_id: str, body: AvailabilityRequest, request: Request):
     """Booking-form submission: deterministic search, recorded in the conversation's context."""
     ctx = resolve_guest_context(request, hotel_id)
     enforce_rate_limits(request, ctx, conversation_id)
-    query = AvailabilityQuery(**body.model_dump())
-    return await run_in_threadpool(container_of(request).conversations.check_availability, ctx, conversation_id, query)
+    return container_of(request).conversations.check_availability(ctx, conversation_id, AvailabilityQuery(**body.model_dump()))
 
 
 @router.post("/availability", response_model=AvailabilityResult, responses={503: {"model": V1ErrorResponse}})
-async def availability(hotel_id: str, body: AvailabilityRequest, request: Request):
+def availability(hotel_id: str, body: AvailabilityRequest, request: Request):
     """Stateless availability search (e.g. for a booking-engine widget)."""
     ctx = resolve_guest_context(request, hotel_id)
     enforce_rate_limits(request, ctx)
-    query = AvailabilityQuery(**body.model_dump())
-    return await run_in_threadpool(container_of(request).conversations.check_availability, ctx, None, query)
+    return container_of(request).conversations.check_availability(ctx, None, AvailabilityQuery(**body.model_dump()))
 

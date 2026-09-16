@@ -152,6 +152,72 @@ def test_circuit_breaker_opens_half_opens_and_closes():
     assert breaker.state == "closed"
 
 
+def _raise(exc):
+    raise exc
+
+
+def _open_breaker(clock, threshold=1, is_failure=lambda exc: True):
+    breaker = CircuitBreaker("x", failure_threshold=threshold, reset_timeout_seconds=10, clock=clock, is_failure=is_failure)
+    for _ in range(threshold):
+        with pytest.raises(ConnectionError):
+            breaker.call(lambda: _raise(ConnectionError()))
+    clock.t += 11
+    assert breaker.state == "half_open"
+    return breaker
+
+
+def test_half_open_allows_exactly_one_concurrent_trial():
+    breaker = _open_breaker(FakeClock())
+    entered, release = threading.Event(), threading.Event()
+    trial_calls, outcomes = [], []
+
+    def trial():
+        trial_calls.append(1)
+        entered.set()
+        release.wait(5)
+        return "ok"
+
+    def caller():
+        try:
+            outcomes.append(breaker.call(trial))
+        except CircuitOpenError:
+            outcomes.append("rejected")
+
+    first = threading.Thread(target=caller)
+    first.start()
+    assert entered.wait(5)
+    others = [threading.Thread(target=caller) for _ in range(5)]
+    for t in others:
+        t.start()
+    for t in others:
+        t.join(5)
+    assert outcomes.count("rejected") == 5 and len(trial_calls) == 1  # concurrent callers fail fast
+    release.set()
+    first.join(5)
+    assert "ok" in outcomes and breaker.state == "closed"
+
+
+def test_failed_half_open_trial_reopens_for_a_full_cooldown():
+    clock = FakeClock()
+    breaker = _open_breaker(clock, threshold=3)
+    with pytest.raises(ConnectionError):
+        breaker.call(lambda: _raise(ConnectionError()))
+    assert breaker.state == "open"  # one failed trial reopens, regardless of the threshold
+    clock.t += 5
+    with pytest.raises(CircuitOpenError):
+        breaker.call(lambda: "never runs")
+    clock.t += 6
+    assert breaker.state == "half_open"
+
+
+def test_non_failure_error_during_trial_releases_the_permit():
+    clock = FakeClock()
+    breaker = _open_breaker(clock, is_failure=lambda exc: not isinstance(exc, ValueError))
+    with pytest.raises(ValueError):
+        breaker.call(lambda: _raise(ValueError()))  # the dependency answered; a caller-side error
+    assert breaker.state == "closed" and breaker.call(lambda: "ok") == "ok"
+
+
 def test_retry_only_retries_listed_errors():
     calls = []
 
@@ -217,15 +283,52 @@ def test_persistent_failure_opens_the_circuit_and_fails_fast(setup):
     provider = resilient(flaky, failures_to_open=3, retries=2)
     query = AvailabilityQuery(check_in=WED, check_out=THU, adults=2)
 
-    with pytest.raises(ReservationError) as first:
-        provider.check_availability(ctx, kb, query, TODAY)
+    # Three logical calls (each with its own 3 attempts) are three breaker failures, not nine.
+    errors = []
+    for _ in range(3):
+        with pytest.raises(ReservationError) as exc:
+            provider.check_availability(ctx, kb, query, TODAY)
+        errors.append(exc.value)
+        assert flaky.calls == 3 * len(errors)
     calls_after_open = flaky.calls
-    with pytest.raises(ReservationError) as second:
+    with pytest.raises(ReservationError) as blocked:
         provider.check_availability(ctx, kb, query, TODAY)
 
-    assert first.value.code == second.value.code == ReservationErrorCode.UNAVAILABLE
+    assert all(e.code == ReservationErrorCode.UNAVAILABLE for e in [*errors, blocked.value])
     assert flaky.calls == calls_after_open  # circuit open: the PMS isn't called again
     assert not provider.is_healthy()
+
+
+def test_one_logical_call_counts_as_one_breaker_failure(setup):
+    ctx, kb, mock = setup
+    flaky = FlakyProvider(mock, failures=100)
+    provider = resilient(flaky, failures_to_open=2, retries=2)
+    with pytest.raises(ReservationError):
+        provider.check_availability(ctx, kb, AvailabilityQuery(check_in=WED, check_out=THU, adults=2), TODAY)
+    assert flaky.calls == 3 and provider.breaker.state == "closed"
+
+
+def test_retry_deadline_stops_new_attempts():
+    now = [0.0]
+    calls = []
+
+    def slow_failure():
+        calls.append(1)
+        now[0] += 1.0  # each attempt burns 1 s of the budget
+        raise ConnectionError
+
+    def fake_sleep(seconds):
+        now[0] += seconds
+
+    with pytest.raises(ConnectionError):
+        retry(slow_failure, attempts=10, retry_on=(ConnectionError,), base_delay=0.5, deadline_seconds=2.5, sleep=fake_sleep, clock=lambda: now[0])
+    assert len(calls) < 10 and now[0] <= 2.5
+
+
+def test_reservation_deadline_is_below_the_tool_timeout(offline_container):
+    from app.tools.builtin import CheckAvailabilityTool
+
+    assert offline_container.reservations.deadline < CheckAvailabilityTool.definition.timeout_seconds
 
 
 def test_business_errors_do_not_trip_the_circuit(setup):
@@ -286,7 +389,7 @@ def test_availability_outage_returns_503_with_stable_code():
         response = client.post(f"/api/v1/hotels/{GOA}/availability", json={"check_in": "2026-10-07", "check_out": "2026-10-08", "adults": 2})
 
     assert response.status_code == 503
-    assert response.json()["error"]["code"] == "AVAILABILITY_UNAVAILABLE"
+    assert response.json()["error"]["code"] == "RESERVATION_UNAVAILABLE"
     assert response.headers["Retry-After"] == "30"
 
 
@@ -301,5 +404,5 @@ def test_model_availability_call_during_outage_gives_a_safe_reply(fake_messages)
 
     assert outcome.reply.type == "fallback"
     assert "can't check live availability" in outcome.reply.text
-    assert outcome.trace.fallback_reason == "availability_unavailable"
+    assert outcome.trace.fallback_reason == "reservation_unavailable"
     assert outcome.trace.tool_calls[0].error_code == ToolErrorCode.DEPENDENCY_UNAVAILABLE
