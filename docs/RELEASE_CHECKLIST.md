@@ -38,7 +38,7 @@ Status at the end of the release-candidate audit (2026-09-16, branch `master`, n
 ## Security
 
 - [x] **Secret scan clean.**
-  - All 191 tracked files: 0 findings.
+  - All 194 tracked files: 0 findings.
   - Untracked new files: 0.
   - Frontend `dist/`: 0, with no provider identifiers.
   - All 324 blobs in git history: the only match is the deliberately fake test key (`sk-ant-api03-THIS-IS-A-TE…`). The local provider key and gateway host appear in no blob or commit message.
@@ -73,7 +73,7 @@ Status at the end of the release-candidate audit (2026-09-16, branch `master`, n
 
 - [x] **README correct.** Windows PowerShell quick start, Node.js 22.12+, test commands. Every relative doc link resolves.
 - [x] **Docs correct.** The code-vs-docs audit found 1 setup blocker (Node version) and 17 minor inconsistencies; all fixed. No production, Docker, CI-passed or Anthropic-verified claims remain.
-- [ ] **Git clean.** Clean after the audit commit (see the final report).
+- [x] **Git clean.** Working tree clean after commit `239eb00` (fix: release-candidate audit fixes); no remote; nothing pushed.
 - [x] **No generated files tracked.** No `dist/`, `node_modules`, `.venv`, `__pycache__`, test results or probe scripts are tracked.
 - [x] **No credentials.** See Security.
 - [ ] **CI.** Configuration validated locally: YAML parses, and every step's command was run locally. **GitHub execution: NOT RUN** (no remote).
