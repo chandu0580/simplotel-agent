@@ -1,0 +1,27 @@
+[project]
+name = "hotel-guest-assistant-backend"
+version = "1.1.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+  "E501",   # long lines are allowed up to line-length; formatting is not enforced
+  "S101",   # assert is used in tests and for internal invariants
+  "B008",   # FastAPI dependency defaults
+  "UP042",  # StrEnum is already used
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"evals/**" = ["S311"]
+"perf/**" = ["S311"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["app"]

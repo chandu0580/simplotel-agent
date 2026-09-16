@@ -1,9 +1,8 @@
+# Runtime dependencies (pinned). Dev/test tools are in requirements-dev.txt.
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
 pydantic==2.13.5
 anthropic==1.6.0
 python-dotenv==1.2.3
-
-# Tests
-pytest==9.1.1
-httpx==0.28.1
+prometheus-client==0.23.1
+tzdata==2026.4

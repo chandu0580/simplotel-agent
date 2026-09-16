@@ -1,291 +1,290 @@
 # Hotel Guest Assistant
 
-An AI guest assistant for a hotel website, built as a full-stack app. Guests can ask about the property, rooms, amenities and policies, and check room availability for their dates, all in one conversation.
+A multi-tenant AI guest assistant for hotel websites. Guests ask about the property, rooms, amenities and policies, and check live availability, all in one conversation. Answers are grounded in each hotel's own knowledge base. Dates, capacity, inventory and prices are always computed by deterministic code, never by the model.
 
-- **Frontend:** React + TypeScript (Vite). Chat UI with an inline booking form and room result cards.
-- **Backend:** Python + FastAPI. Hotel knowledge base in JSON, a deterministic availability service, and Claude (`claude-opus-5`) for understanding questions and writing answers.
-- **Keeps working when the AI fails:** if the model is down, times out, refuses or returns bad output, the backend answers from the FAQ using deterministic matching and tells the guest.
-
-The demo property, *The Palm Grove Resort, Goa*, is fictional.
-
-| Doc | What's in it |
-|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data flow and API contract |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Product, UX, engineering and AI decisions, plus answers to the assignment's questions |
-| [docs/EVALUATION.md](docs/EVALUATION.md) | Test and eval scenarios with observed results |
+The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation and container packaging. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
 
 ## Status
 
 | | |
 |---|---|
-| Implemented and tested locally | Chat UI, booking form, room results, loading/error/offline states, FastAPI API, knowledge-base grounding checks, deterministic availability, fallback engine |
-| Automated results (2026-09-16) | Backend **87 passed** · Frontend **9 passed** · E2E **6 passed** (desktop + mobile) · Offline eval **21/21** (6 AI-only skipped) · type check, lint, build pass |
-| **Anthropic Claude live API** | **Not executed: no Anthropic API credential was available.** The request format is checked with the real Anthropic SDK against a mocked HTTP transport, which does not prove the live API accepts it. See [Evaluation § C](docs/EVALUATION.md#c-anthropic-claude-live-evaluation). |
-| Development-provider testing (not Claude) | The same model code path run end to end against `glm-5.2` through an Anthropic-compatible gateway: 27-scenario AI-mode eval **26/27** and **27/27** over two runs. This found and fixed real integration issues but is **not** Claude verification. See [Evaluation § D](docs/EVALUATION.md#d-development-provider-evaluation-glm-52--not-claude). |
-| Mocked | Room inventory and rates (`inventory.json`), booking (there is none; guests are pointed to the front desk) |
+| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, offline fallback, AI traces, metrics, structured logs, rate limiting, admin RBAC boundary, i18n, Docker |
+| **Prototype** (in-memory, single process, or mock) | Conversation store, idempotency store, rate limiter, cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
+| **Designed / documented only** | OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, persistent database, dashboards and alerting |
+| **Verification (2026-09-16)** | Backend **203** tests · Frontend **13** · E2E **6** (desktop + mobile) · Offline eval **28/28** · Docker images built and run healthy |
+| **Live Anthropic API** | **Not verified.** No Anthropic credential was available. The Claude integration is tested with a fake client and with the real SDK against a mocked HTTP transport. AI-mode evals ran against a **GLM development provider** (33/34, 34/34, 32/34), which is **not** Claude verification. |
 
-## The customer problem
+Details: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
 
-A guest deciding whether to book has quick questions: check-in time, breakfast, cancellation, "is there a room for three of us next weekend?". The answers are scattered across policy pages or need a call or WhatsApp to the front desk, so guests drop off or book through an OTA, which costs the hotel commission. This assistant answers from the hotel's own data straight away, checks live availability (mocked here), and hands off to staff whenever it can't answer reliably.
+## Features
 
-## How it works
+- **Grounded Q&A.** Each answer cites knowledge-base entries. Uncited answers, fabricated prices, inventory claims and prompt or secret leakage are blocked before reaching the guest.
+- **Availability.** The model decides when to search or ask for details; code validates dates and computes capacity, inventory and price. Results render as room cards.
+- **Conversations.** History and booking context are kept on the server, so follow-ups like "what about 3 adults?" work. Conversations expire and guests can delete them.
+- **Graceful degradation.**
+  - If the model fails, a deterministic FAQ engine answers.
+  - If reservations are down, the guest gets a safe reply, and availability endpoints return 503.
+  - Admin requests without configured auth get an honest 401.
+- **Multi-tenant.** Every request is scoped to a tenant and hotel. Two demo tenants (a Goa resort and a Bengaluru business hotel) prove isolation.
+- **Guest UI.** English plus a draft Hindi translation, hotel branding, loading/error/retry/offline states, keyboard and screen-reader support.
+
+## Architecture
 
 ```
-Browser (React)  ──POST /api/chat──────────►  FastAPI  ──►  ChatService
-      │                                                     ├─ ClaudeAssistant: one Claude call per turn
-      │                                                     │    system prompt + knowledge base, 2 tools, JSON output
-      │                                                     │    → code checks citations, runs check_availability,
-      │                                                     │      builds the booking form, adds contact details to fallbacks
-      │                                                     └─ on any model failure → OfflineAssistant (keyword FAQ + intent rules)
-      └──POST /api/availability (booking form)──►  check_availability (deterministic: dates, capacity, inventory, price)
+Browser (React + Vite)
+   │  /api/v1/hotels/{hotel_id}/...
+   ▼
+FastAPI  ── middleware: request/trace ids · security headers · rate limits · tenant resolution
+   │
+ConversationService ── server-side context, expiry, locking
+   │
+AssistantService ── input guardrails ─► AIAssistant (1 LLM call, 3 strict tools, output guardrails)
+   │                                   └► OfflineAssistant (deterministic fallback)
+   ├─► ToolRegistry ─► ReservationProvider (resilient wrapper → mock inventory)
+   ├─► KnowledgeProvider + Retriever (per-hotel JSON, content lifecycle)
+   └─► LLMProvider (Anthropic adapter) · ModelRouter
+Cross-cutting: config & flags · structured logs · AI traces · Prometheus metrics · domain events
 ```
 
-The model interprets questions and writes answers. **Code decides the facts that matter:** dates are validated, and room capacity, inventory and prices come only from backend data and go straight to the UI. The API key lives only in the backend. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
+Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md), [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md)
 
 ## Quick start
 
-**Prerequisites:** Python 3.11+ (developed on 3.13), Node.js 20+ (developed on 22), and an Anthropic API key if you want AI mode.
-
-> **Windows:** clone into a short path (e.g. `C:\dev\simplotel-agent`) or [enable long paths](https://pip.pypa.io/warnings/enable-long-paths). Some files in the Anthropic SDK have very long names; in a deeply nested folder `pip install` cannot write them (OSError) and the backend then fails with `ModuleNotFoundError: anthropic.types...`. This was hit during clean-clone verification.
-
-### 1. Backend
+### Option A: Docker (one command)
 
 ```bash
+docker compose up --build        # http://localhost:8080
+```
+
+Without an Anthropic key the assistant runs in offline FAQ mode. To enable AI, put `ANTHROPIC_API_KEY=...` in `backend/.env`; it is read at runtime and never baked into the image.
+
+### Option B: Local development
+
+Requirements: Python 3.11+ (developed on 3.13) and Node.js 20+ (developed on 22).
+
+On Windows, clone into a short path (e.g. `C:\dev\simplotel-agent`) or [enable long paths](https://pip.pypa.io/warnings/enable-long-paths). Some Anthropic SDK file names are long enough that `pip install` fails in deeply nested folders.
+
+```bash
+# Backend
 cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env        # then set ANTHROPIC_API_KEY in .env
-uvicorn app.main:app --reload --port 8000
-```
+pip install -r requirements-dev.txt
+cp .env.example .env              # optional: add ANTHROPIC_API_KEY
+uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/docs
 
-Check it's running: `curl http://localhost:8000/api/health` returns `{"status":"ok","mode":"ai"}`. The mode is `"offline"` if no key is set. Interactive API docs are at http://localhost:8000/docs.
-
-### 2. Frontend
-
-```bash
+# Frontend (second terminal)
 cd frontend
 npm install
-npm run dev
+npm run dev                       # http://localhost:5173 (proxies /api to :8000)
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api/*` to `http://127.0.0.1:8000`, so the browser only talks to your own backend and never sees the API key. To point at a different backend, set `VITE_PROXY_TARGET` in dev, or `VITE_API_BASE_URL` for a production build.
+To point the UI at the second demo hotel, run `VITE_HOTEL_ID=hotel-blr-001 npm run dev`.
 
-### Try it
+## Environment
 
-1. Ask "What time is check-in?" You get an answer with a "Based on: Check-in and check-out times" source line.
-2. Follow up with "Can I check in early?" The conversation context carries over.
-3. Ask "Do you have rooms available?" A date and guest form appears in the chat.
-4. Pick a weekday stay for 3 adults. You get room cards with total price, breakfast badge and rooms left.
-5. Pick a Friday–Sunday stay for 4 adults + 1 child. Only the Family Suite fits, and it's sold out on Saturdays, so you see the sold-out state.
-6. Ask "Is there a casino?" You get a fallback with Call, WhatsApp and Email buttons.
-7. Stop the backend and send a message. An error appears with a "Try again" button.
+All backend settings are documented in [backend/.env.example](backend/.env.example) and validated in `app/core/config.py`. The main ones:
 
----
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Enables AI mode. Server-side only |
+| `APP_ENV` | `development` | `production` rejects dev auth, localhost/wildcard CORS, text logs and disabled rate limits |
+| `ANTHROPIC_MODEL` / `ANTHROPIC_EFFORT` | `claude-opus-5` / `low` | Model routing for guest turns |
+| `AI_ENABLED` | `true` | Global kill switch (tenants can also disable AI via `ai_assistant_enabled`) |
+| `AUTH_MODE` | `disabled` | Admin API auth; `static_token` is for development only |
+| `RATE_LIMIT_*` | 60/min IP · 20/min conversation · 1200/min hotel | In-process limiter |
+| `FEATURE_*` | see `app/core/flags.py` | Global feature flags; per-tenant overrides live in `app/data/tenants.json` |
 
-## Running tests
+Frontend: `VITE_HOTEL_ID` (default `hotel-goa-001`), `VITE_API_BASE_URL` (for builds served from another origin). There are no provider credentials in the frontend.
+
+## API
+
+The full contract is in OpenAPI at `/docs` (outside production) and in the committed snapshot [docs/openapi.json](docs/openapi.json).
+
+### Guest API (v1)
+
+The responses below were captured from the running backend in offline mode.
 
 ```bash
-# Backend unit, API and SDK-contract tests (87); the model is faked or HTTP-mocked, so no key is needed
-cd backend && python -m pytest
-
-# Frontend component tests (9): loading, error/retry, forms, results, follow-up context
-cd frontend && npm test
-
-# End-to-end (6 runs: 3 flows × desktop + mobile viewport). Starts real backend + frontend.
-cd frontend && npx playwright install chromium && npm run test:e2e
-#   E2E_USE_AI=true npm run test:e2e   → same flows against live Claude (needs key)
-
-# Scenario evals (27 scenarios; 6 only run in AI mode)
-cd backend && python -m evals.run_evals --mode offline   # deterministic engine, free
-cd backend && python -m evals.run_evals --mode ai        # live Claude, costs tokens
-#   Pointing ANTHROPIC_BASE_URL/ANTHROPIC_MODEL at another Anthropic-compatible endpoint also works, but pass
-#   --label <name> so those results are never mistaken for Claude results.
+# Start a conversation
+curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations \
+  -H "Content-Type: application/json" -d '{"locale": "en"}'
 ```
-
-Results are written to `backend/evals/results/<mode>.md`.
-
----
-
-## API examples
-
-### Ask a question
-
-> **About these examples:** the AI-mode JSON bodies (`"mode": "ai"`) are illustrative. They show the response shape the schema enforces, but they weren't captured from a live Claude run (see Status). The `/api/availability` and error examples are real outputs from the backend.
+```json
+{"conversation_id": "conv_37ef7f7dcfb54a88b102a355edc7f759", "hotel_id": "hotel-goa-001", "channel": "web", "locale": "en", "expires_at": "2026-10-06T12:00:00Z"}
+```
 
 ```bash
-curl -s http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Does the hotel have a swimming pool?", "history": []}'
+# Send a message (history and booking context are kept on the server)
+curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/$CID/messages \
+  -H "Content-Type: application/json" -d '{"message": "What is the cancellation policy?"}'
 ```
-
 ```json
 {
-  "request_id": "c5a4465ed8e9",
-  "mode": "ai",
+  "request_id": "851f69cec16b43e0",
+  "conversation_id": "conv_37ef7f7dcfb54a88b102a355edc7f759",
+  "mode": "offline",
   "reply": {
     "type": "answer",
-    "text": "Yes, the resort has an outdoor lagoon swimming pool open daily from 7:00 AM to 8:00 PM, with a separate shallow children's pool.",
-    "sources": [{ "id": "amenities.pool", "title": "Swimming pool" }],
-    "suggestions": ["Is there a lifeguard?", "Is breakfast included?"],
-    "availability": null,
-    "booking_prefill": null,
-    "form_error": null
+    "text": "Standard (flexible) rates can be cancelled free of charge up to 48 hours before the check-in date. …",
+    "sources": [{"id": "policies.cancellation", "title": "Cancellation policy"}],
+    "suggestions": ["What time is check-in?", "Is breakfast included?", "Check room availability"],
+    "availability": null, "booking_prefill": null, "form_error": null
   },
-  "notice": null
+  "notice": "AI answers are turned off; answers are coming from our standard hotel FAQ.",
+  "meta": {"trace_id": "8fe4f8701638408e897df99d44ac5f3f", "prompt_version": null, "tool_schema_version": null, "knowledge_version": "000669a8d553"}
 }
 ```
 
-### Follow-up with conversation context
+In AI mode, `mode` is `"ai"` and `meta` also carries `prompt_version` (e.g. `guest-assistant@4+…`) and `tool_schema_version`. `reply.type` is one of `answer`, `clarification`, `fallback`, `availability` or `collect_booking_details`.
 
 ```bash
-curl -s http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-        "message": "Does it include breakfast?",
-        "history": [
-          {"role": "user", "content": "Which room is suitable for three guests?"},
-          {"role": "assistant", "content": "The Deluxe Pool View Room sleeps three, and the Family Suite sleeps up to five."}
-        ],
-        "booking_context": {"adults": 3}
-      }'
+# Booking-form search (deterministic, no LLM), recorded in the conversation's context
+curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/$CID/availability \
+  -H "Content-Type: application/json" -d '{"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 3}'
 ```
-
-### Availability request without dates
-
-The backend asks the UI to show the booking form:
-
-```bash
-curl -s http://localhost:8000/api/chat -H "Content-Type: application/json" \
-  -d '{"message": "Do you have rooms available?"}'
-```
-
 ```json
 {
-  "mode": "ai",
-  "reply": {
-    "type": "collect_booking_details",
-    "text": "Happy to check! Which dates would you like, and how many guests?",
-    "booking_prefill": { "check_in": null, "check_out": null, "adults": null, "children": null }
-  }
-}
-```
-
-### Availability with dates in the question
-
-The model calls `check_availability`:
-
-```bash
-curl -s http://localhost:8000/api/chat -H "Content-Type: application/json" \
-  -d '{"message": "Any rooms for 3 adults from 2026-10-07 to 2026-10-09?"}'
-# → reply.type = "availability", reply.availability = { ...same shape as below... }
-```
-
-### Deterministic availability
-
-This is the endpoint the booking form uses. No LLM is involved.
-
-```bash
-curl -s http://localhost:8000/api/availability -H "Content-Type: application/json" \
-  -d '{"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 3, "children": 0}'
-```
-
-```json
-{
-  "check_in": "2026-10-07", "check_out": "2026-10-09", "nights": 2, "adults": 3, "children": 0,
-  "available": true,
-  "rooms": [
-    { "room_id": "deluxe-pool-view", "name": "Deluxe Pool View Room", "max_occupancy": 3,
-      "breakfast_included": true, "rooms_left": 8, "nightly_rate": 7800, "total_price": 15600, "currency": "INR", "...": "..." }
-  ],
+  "check_in": "2026-10-07", "check_out": "2026-10-09", "nights": 2, "adults": 3, "children": 0, "available": true,
+  "rooms": [{"room_id": "deluxe-pool-view", "name": "Deluxe Pool View Room", "max_occupancy": 3, "breakfast_included": true,
+             "rooms_left": 8, "nightly_rate": 7800, "total_price": 15600, "currency": "INR", "...": "..."}],
   "sold_out_room_names": [],
   "message": "2 room types available for 3 adults, 2 nights from Wed 07 Oct 2026 to Fri 09 Oct 2026.",
   "season_label": null
 }
 ```
 
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/hotels/{hotel_id}` | Public profile: branding, languages, today's date at the hotel, form limits |
+| `POST /api/v1/hotels/{hotel_id}/conversations` | Start a conversation |
+| `GET` / `DELETE /api/v1/hotels/{hotel_id}/conversations/{id}` | View or delete (data minimisation) |
+| `POST .../conversations/{id}/messages` | Guest turn |
+| `POST .../conversations/{id}/availability` | Form search recorded in the conversation |
+| `POST /api/v1/hotels/{hotel_id}/availability` | Stateless availability search |
+| `GET /health` · `GET /ready` · `GET /metrics` | Liveness · readiness · Prometheus (internal only) |
+| `GET /api/v1/admin/tenants/{tenant_id}/hotels[/{hotel_id}/knowledge \| /ai-config]` | Admin, read-only, role- and tenant-scoped |
+| `/api/chat`, `/api/availability`, `/api/hotel`, `/api/health` | Original assignment endpoints for the default hotel; deprecated, still supported |
+
 ### Errors
 
-All errors share one shape:
+```json
+{"error": {"code": "INVALID_BOOKING_DETAILS", "message": "Check-out date must be after the check-in date.", "request_id": "1b312934a28b407a", "details": null}}
+```
+
+| Codes | Status |
+|---|---|
+| `VALIDATION_ERROR`, `INVALID_BOOKING_DETAILS` | 422 |
+| `HOTEL_NOT_FOUND`, `CONVERSATION_NOT_FOUND` | 404 |
+| `RATE_LIMITED` | 429, with `Retry-After` |
+| `AVAILABILITY_UNAVAILABLE` | 503, with `Retry-After` |
+| `AUTH_NOT_CONFIGURED`, `AUTHENTICATION_REQUIRED` | 401 |
+| `FORBIDDEN` | 403 |
+| `INTERNAL_ERROR` | 500; never includes stack traces |
+
+Legacy endpoints keep their original lowercase codes.
+
+## Testing
 
 ```bash
-curl -s http://localhost:8000/api/availability -H "Content-Type: application/json" \
-  -d '{"check_in": "2026-10-09", "check_out": "2026-10-07", "adults": 2}'
+cd backend
+python -m pytest                                  # 203 tests: unit, integration, contract, security
+ruff check app tests evals scripts perf
+python -m evals.run_evals --mode offline --baseline evals/results/offline.json   # eval + regression gate
+python -m perf.benchmark                          # local overhead profile
+
+cd ../frontend
+npm test                                          # 13 component tests
+npm run build                                     # type check + build
+npx playwright install chromium && npm run test:e2e   # 6 E2E runs (real backend + frontend, desktop + mobile)
 ```
 
-```json
-{ "request_id": "c80b465cecb4",
-  "error": { "code": "invalid_booking_details", "message": "Check-out date must be after the check-in date.", "details": null } }
-```
+CI (`.github/workflows/ci.yml`) runs all of the above plus dependency audits and a Docker smoke test, with no secrets needed. Live AI evaluation is a separate manual workflow (`ai-eval.yml`) gated on an `ANTHROPIC_API_KEY` secret. **Neither workflow has been run on GitHub yet.**
 
-| Status | `error.code` | When |
-|---|---|---|
-| 422 | `validation_error` | Malformed body: blank or oversized message, bad date format, unknown fields, too much history. `details` lists the fields. |
-| 422 | `invalid_booking_details` | Well-formed but not bookable: past dates, check-out before check-in, stay over 30 nights. |
-| 500 | `internal_error` | Unexpected server error. No internals are exposed; use `request_id` to find it in the logs. |
+## Evaluation
 
-LLM failures do **not** return an error. They return `200` with `"mode": "offline"` and a `notice`.
+34 scenarios covering functional, grounding, tool-calling, conversation, safety, prompt-injection and multi-tenant cases. Checks are structured wherever possible: which decision the model made, tool arguments, cited evidence, guardrails triggered, and whether the model was called at all.
 
----
+| Run | Result |
+|---|---|
+| Offline | 28/28 (6 AI-only skipped); groundedness 15/15 |
+| GLM development provider (**not Claude**) | 33/34, 34/34, and 32/34 after review fixes (one plain-text-instead-of-tool fallback; one false-negative check since corrected); decision accuracy 18/18 in every run |
+| Anthropic live | **Not executed**, no credential |
 
-## Configuration
+Details and history: [docs/EVALUATION.md](docs/EVALUATION.md).
 
-Set these in `backend/.env` (see [.env.example](backend/.env.example)):
+## AI architecture in brief
 
-| Variable | Default | Notes |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | — | Required for AI mode. Server-side only. |
-| `ANTHROPIC_MODEL` | `claude-opus-5` | |
-| `ANTHROPIC_EFFORT` | `low` | `low` / `medium` / `high`. Low keeps chat latency down; raise it if evals show a gap. |
-| `ANTHROPIC_REFUSAL_FALLBACK` | `default` | `default`: if Claude declines a request, the API re-runs it once on a substitute model (server-side, beta `server-side-fallback-2026-07-01`). `none`: turn off, e.g. for a model or platform that doesn't support it. |
-| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `20` / `1` | After these, the backend falls back to offline mode. |
-| `AI_ENABLED` | `true` | Set to `false` to force offline mode, like a kill switch. |
-| `CORS_ORIGINS` | `http://localhost:5173` | Explicit allow-list (no wildcard). Only matters when the frontend is served from a different origin than the API; the Vite dev proxy makes calls same-origin. |
+- **One model call per turn.** The model must reply through exactly one strict tool: `answer_guest`, `check_availability` or `request_booking_details`. Tool results go straight to the UI, so the model never restates prices or inventory. The answer is a tool, not a JSON output format, because a real development model stopped calling tools when both were enabled.
+- **Grounding.** The system prompt holds the hotel's published knowledge (about 2.8k tokens for the demo hotel). Every factual answer must cite entry ids, which code validates.
+- **Versioned.** Prompt, tool-schema and knowledge versions are recorded in traces, API responses and eval results.
+- **Model-agnostic core.** The `LLMProvider` interface isolates SDK details, and `ModelRouter` selects a model per task.
+- **Why no vector database:** the content fits in the prompt, and retrieval would only add a way to miss evidence. The retrieval interface is ready for when content grows. See [docs/DECISIONS.md](docs/DECISIONS.md).
 
-## Project layout
+## Security
 
-```
-backend/
-  app/
-    main.py               FastAPI app: routes, request IDs, error envelope, logging
-    service.py            Chooses AI vs offline assistant; degrades on LLM failure
-    claude_assistant.py   Prompt, strict tools (answer / availability / details form), grounding checks
-    offline.py            Deterministic FAQ matching + availability intent (fallback engine)
-    availability.py       Mock inventory, validation, pricing: checkAvailability
-    knowledge.py          Loads and validates the knowledge base
-    schemas.py            Request/response contract (Pydantic)
-    data/hotel.json       Hotel knowledge base (rooms, policies, amenities, FAQs)
-    data/inventory.json   Mock inventory, weekend demand rules, blackout dates
-  tests/                  pytest: availability, offline engine, knowledge base, API + LLM flows (fake client),
-                          SDK request contract (real SDK, mocked HTTP)
-  evals/                  Scenario evals runnable offline or against live Claude; results/ holds the latest run
-frontend/
-  src/api/                Typed API client (timeouts, error classification)
-  src/hooks/useChat.ts    Conversation state, history, booking context, retry
-  src/components/         MessageList, AvailabilityForm, AvailabilityResults, Composer
-  src/App.test.tsx        Component tests
-  e2e/                    Playwright end-to-end tests (desktop + mobile)
-docs/                     Architecture, decisions, evaluation
-```
+- **Credentials:** held only by the backend, read from the environment, and redacted in logs. None are in the frontend or container images (verified by scanning the exported image filesystems).
+- **Guardrails:**
+  - Input: exfiltration attempts blocked before the model; injection attempts flagged and counted; prompt tags neutralised.
+  - Output: secret/prompt leakage, uncited answers, unsupported prices and inventory claims.
+  - Tools: the model can only request exposed read-only tools.
+- **Isolation:** tenant-scoped data access, with isolation tests.
+- **Admin API:** refuses until real auth is configured; RBAC with tenant and hotel scoping.
+- **HTTP hygiene:** rate limits, CORS allow-list, security headers (API and nginx), production configuration validation.
+- **Containers:** non-root, read-only filesystem, capabilities dropped, digest-pinned base images.
 
-## Limitations (intentional for this assignment)
+Threats, residual risks and roadmap: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
-- **Mocked availability.** Inventory, weekend demand and rates come from `inventory.json`, not a PMS or booking engine. There's no reservation flow; room cards point to the front desk.
-- **Small, static knowledge base.** 17 entries plus 4 rooms in JSON, all placed in the prompt. There's no admin UI and no retrieval.
-- **Stateless conversations.** The client sends the last 12 turns plus the last booking details. Nothing is persisted server-side, and a client could forge history. That only affects wording, never prices or availability.
-- **No authentication, rate limiting or bot protection.**
-- **Children are counted toward room occupancy regardless of age.** The policy says under-6s stay free; the form doesn't collect ages.
-- **English only.** Dates in offline mode are recognised only in ISO format (`2026-10-07`); natural-language dates need AI mode.
-- **Prompt caching is requested but likely inactive.** The prompt prefix (about 2.8k tokens) is probably below the model's minimum cacheable size.
-- **Not verified against the live Anthropic Claude API** (see Status). The development-provider runs used GLM, whose behaviour can differ from Claude's.
-- **Offline mode is literal.** It matches keywords, so off-topic questions sometimes return a loosely related entry (e.g. "nearby nightclub" returns the location entry) rather than a fallback. It never invents facts.
+## Observability
 
-Production next steps are in [docs/DECISIONS.md](docs/DECISIONS.md#what-would-you-improve-before-taking-this-to-production): real booking-engine integration, server-side sessions, rate limiting, observability, an eval pipeline in CI, a knowledge-base admin UI, and multilingual support.
+Structured JSON logs carry request, trace, tenant, hotel, conversation and channel context. There is an `AITrace` per turn (model, versions, evidence, tool calls, guardrails, tokens, latency, fallback reason), Prometheus metrics with low-cardinality labels, and domain events that never include message text. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) and [docs/SRE.md](docs/SRE.md).
+
+## Multi-tenancy
+
+`app/data/tenants.json` maps tenants to hotels. Each hotel has its own `hotel.json` (profile, brand, languages, rooms, knowledge with lifecycle) and `inventory.json`. Requests resolve `hotel_id` to a `TenantContext`. Conversations, bookings and caches are keyed by tenant and hotel, so a conversation from one hotel is a 404 through another. Feature flags can be overridden per tenant.
+
+## Limitations
+
+- **Unverified:** the live Anthropic API has not been called, and the CI workflows have never run on GitHub.
+- **Mocked:** availability and bookings use a mock provider. There is no PMS integration or payment flow.
+- **Single process:** conversations, rate limits, idempotency, cache and locks are in memory. Multiple replicas need Redis or Postgres first.
+- **Authentication:** admin authentication is not production-grade (development static tokens only); guest chat is unauthenticated by design.
+- **Offline mode is literal:** it matches keywords, answers in English only, and recognises ISO dates only.
+- **Hindi UI strings are a draft** that needs native review.
+- **Not wired up yet:** WhatsApp and voice have render adapters but no inbound channels; semantic retrieval isn't implemented.
+- **Unmeasured:** nothing has been load tested or deployed, and every SLO in the docs is a proposal.
+
+## Production roadmap
+
+1. **Persistent stores:** Postgres for tenants, knowledge, bookings and audit; Redis for conversations, rate limits and idempotency.
+2. **Authentication:** OIDC for admin and staff, and guest authentication for booking management.
+3. **Real reservation integration:** a PMS or channel-manager adapter behind `ReservationProvider`.
+4. **Live evaluation:** run the eval suite against Claude, and gate prompt and model changes on it.
+5. **Observability stack:** OpenTelemetry export, dashboards and alerts; an LLM-judge groundedness check on sampled traffic.
+6. **Edge protection:** WAF and bot protection, per-tenant LLM budgets, PII redaction before model calls.
+7. **Knowledge authoring:** an admin publishing workflow for knowledge content.
+8. **Channels:** WhatsApp and voice ingress.
+9. **Semantic retrieval**, once content outgrows the prompt.
+
+Migration path and scaling stages: [docs/ENTERPRISE_ARCHITECTURE.md](docs/ENTERPRISE_ARCHITECTURE.md).
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [ASSIGNMENT_SCOPE](docs/ASSIGNMENT_SCOPE.md) | What the assignment required vs what was added |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Codebase map and one guest turn |
+| [DECISIONS](docs/DECISIONS.md) | Product, UX, AI and engineering decisions (incl. the assignment's questions) |
+| [ENTERPRISE_ARCHITECTURE](docs/ENTERPRISE_ARCHITECTURE.md) | Target architecture, tenancy, data model, scalability, migration |
+| [SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md) | Request lifecycles and failure paths (sequence diagrams) |
+| [THREAT_MODEL](docs/THREAT_MODEL.md) | Threats, mitigations, residual risk |
+| [SRE](docs/SRE.md) · [OBSERVABILITY](docs/OBSERVABILITY.md) | Proposed SLOs, runbooks, DR, dashboards, metric definitions |
+| [COST_MODEL](docs/COST_MODEL.md) | LLM cost drivers and levers |
+| [ENTERPRISE_READINESS](docs/ENTERPRISE_READINESS.md) | Capability-by-capability status |
+| [EVALUATION](docs/EVALUATION.md) | Test and eval results, current and historical |
 
 ## AI tools used
 
-- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): scaffolding, implementation, tests, the engineering audits and documentation drafts. Every test and eval result quoted in this repo comes from commands actually run.
-- **GLM (`glm-5.2`, via an Anthropic-compatible gateway):** used only as a development provider to run the AI-mode eval suite through the app's real model code path. It is not the production model, and those runs are not Claude verification.
-- **Claude API (`claude-opus-5`):** the runtime model the backend is built for. Not yet exercised live; see Status.
+- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): design, implementation, tests, reviews and documentation, including parallel sub-agents that drafted the design documents from the code. Every result quoted in this repository comes from commands that were actually run.
+- **GLM (`glm-5.2`, via an Anthropic-compatible gateway):** a development provider for running the AI-mode eval suite through the app's real model code path. It is not the production model, and those runs are not Claude verification.
+- **Claude API (`claude-opus-5`):** the runtime model the backend is built for. Not yet exercised live.

@@ -1,20 +1,26 @@
 from datetime import date
+import json
 from types import SimpleNamespace
 from typing import Any
-import json
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
-from app import availability as availability_module
-from app import main as main_module
-from app.claude_assistant import ClaudeAssistant
-from app.knowledge import get_knowledge_base
-from app.offline import OfflineAssistant
-from app.service import ChatService
+from app.assistant.turn import TurnRequest
+from app.container import Container, build_container
+from app.core.clock import FixedClock
+from app.core.config import Settings
+from app.core.tracing import AITrace
+from app.llm.anthropic_provider import AnthropicProvider
+from app.main import create_app
+from app.reservations.availability import load_inventory
+from app.schemas import BookingContext
+from app.tenancy import Channel
 
 # A Monday outside any pricing season, so weekday rules and prices are predictable.
 TODAY = date(2026, 10, 5)
+GOA = "hotel-goa-001"
+BLR = "hotel-blr-001"
 
 
 def text_response(payload: dict | str, stop_reason: str = "end_turn") -> SimpleNamespace:
@@ -56,15 +62,21 @@ class FakeMessages:
         return item
 
 
-@pytest.fixture(autouse=True)
-def fixed_today(monkeypatch):
-    monkeypatch.setattr(availability_module, "hotel_today", lambda: TODAY)
-    monkeypatch.setattr(main_module, "hotel_today", lambda: TODAY)
+def make_container(messages_client: Any | None = None, **settings_overrides) -> Container:
+    provider = AnthropicProvider(messages_client) if messages_client is not None else None
+    return build_container(Settings.for_tests(**settings_overrides), clock=FixedClock(TODAY), llm_provider=provider)
 
 
-@pytest.fixture
-def kb():
-    return get_knowledge_base()
+def turn_request(container: Container, message: str, hotel_id: str = GOA, booking_context: BookingContext | None = None, **kwargs) -> TurnRequest:
+    ctx = container.tenants.resolve(hotel_id, Channel.WEB, "test-request", "0" * 32)
+    return TurnRequest(tenant=ctx, message=message, booking_context=booking_context, **kwargs)
+
+
+def ai_reply(container: Container, message: str, **kwargs):
+    """Call the AI assistant directly (no offline fallback) so model-path errors surface."""
+    turn = container.assistant.resolve_turn(turn_request(container, message, **kwargs))
+    trace = AITrace(trace_id="t", request_id="r", tenant_id=turn.tenant.tenant_id, hotel_id=turn.tenant.hotel_id, channel="web")
+    return container.assistant.ai.reply(turn, trace)
 
 
 @pytest.fixture
@@ -72,19 +84,36 @@ def fake_messages():
     return FakeMessages()
 
 
-def _client(service: ChatService):
-    main_module.app.state.chat_service = service
-    with TestClient(main_module.app) as client:
+@pytest.fixture
+def ai_container(fake_messages):
+    return make_container(fake_messages)
+
+
+@pytest.fixture
+def offline_container():
+    return make_container()
+
+
+@pytest.fixture
+def kb(offline_container):
+    return offline_container.knowledge.snapshot(GOA, TODAY)
+
+
+@pytest.fixture
+def inventory(offline_container):
+    return load_inventory(offline_container.settings.data_dir / "hotels" / GOA / "inventory.json")
+
+
+def _client(container: Container):
+    with TestClient(create_app(container=container)) as client:
         yield client
-    del main_module.app.state.chat_service
 
 
 @pytest.fixture
-def ai_client(kb, fake_messages):
-    ai = ClaudeAssistant(kb, fake_messages, model="claude-opus-5", effort="low")
-    yield from _client(ChatService(offline=OfflineAssistant(kb), ai=ai))
+def ai_client(ai_container):
+    yield from _client(ai_container)
 
 
 @pytest.fixture
-def offline_client(kb):
-    yield from _client(ChatService(offline=OfflineAssistant(kb), ai=None))
+def offline_client(offline_container):
+    yield from _client(offline_container)

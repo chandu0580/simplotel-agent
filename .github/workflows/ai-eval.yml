@@ -1,0 +1,45 @@
+name: Live AI evaluation (Anthropic)
+
+# Manual only: calls the real Anthropic API and costs tokens. Requires the ANTHROPIC_API_KEY secret
+# in the "ai-evaluation" environment. The normal CI workflow never needs a secret.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model to evaluate
+        default: claude-opus-5
+      effort:
+        description: Effort level (low | medium | high)
+        default: low
+
+permissions:
+  contents: read
+
+jobs:
+  ai-eval:
+    runs-on: ubuntu-latest
+    environment: ai-evaluation
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
+      - name: Run scenarios against the live model
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ inputs.model }}
+          ANTHROPIC_EFFORT: ${{ inputs.effort }}
+          APP_ENV: test
+        # Inputs are passed via env and sanitised in the shell, never interpolated into the script (prevents injection).
+        run: |
+          label="ai-$(printf '%s' "$ANTHROPIC_MODEL" | tr -c 'A-Za-z0-9._-' '_')"
+          python -m evals.run_evals --mode ai --label "$label"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-eval-results
+          path: backend/evals/results/ai-*

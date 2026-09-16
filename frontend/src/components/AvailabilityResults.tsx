@@ -1,5 +1,6 @@
 import type { AvailabilityResult } from '../api/types'
-import { formatDate, formatMoney, partyLabel, plural } from '../format'
+import { formatDate, formatMoney, nightsLabel, partyLabel } from '../format'
+import { useI18n } from '../i18n/context'
 
 interface Props {
   result: AvailabilityResult
@@ -8,23 +9,24 @@ interface Props {
 }
 
 export function AvailabilityResults({ result, contactPhone, onChangeDates }: Props) {
+  const { t, dateLocale } = useI18n()
   return (
-    <section className="availability" aria-label="Availability results">
+    <section className="availability" aria-label={t('results.label')}>
       <header className="availability__summary">
         <div>
           <strong>
-            {formatDate(result.check_in)} → {formatDate(result.check_out)}
+            {formatDate(result.check_in, dateLocale)} → {formatDate(result.check_out, dateLocale)}
           </strong>
           <span>
-            {plural(result.nights, 'night')} · {partyLabel(result.adults, result.children)}
+            {nightsLabel(t, result.nights)} · {partyLabel(t, result.adults, result.children)}
           </span>
         </div>
         <button type="button" className="btn btn--link" onClick={onChangeDates}>
-          Change
+          {t('results.change')}
         </button>
       </header>
 
-      {result.season_label && <p className="availability__season">{result.season_label} rates apply to some nights.</p>}
+      {result.season_label && <p className="availability__season">{t('results.season', { label: result.season_label })}</p>}
 
       {result.available ? (
         <ul className="room-list">
@@ -33,26 +35,20 @@ export function AvailabilityResults({ result, contactPhone, onChangeDates }: Pro
               <div className="room-card__main">
                 <h4>{room.name}</h4>
                 <p className="room-card__meta">
-                  Sleeps {room.max_occupancy} · {room.beds} · {room.size_sqm} m²
+                  {t('results.sleeps', { count: room.max_occupancy })} · {room.beds} · {room.size_sqm} m²
                 </p>
                 <div className="room-card__badges">
                   {room.breakfast_included ? (
-                    <span className="badge badge--good">Breakfast included</span>
+                    <span className="badge badge--good">{t('results.breakfast')}</span>
                   ) : (
-                    <span className="badge">Room only</span>
+                    <span className="badge">{t('results.roomOnly')}</span>
                   )}
-                  {room.rooms_left <= 3 && (
-                    <span className="badge badge--warn">
-                      Only {room.rooms_left} left
-                    </span>
-                  )}
+                  {room.rooms_left <= 3 && <span className="badge badge--warn">{t('results.onlyLeft', { count: room.rooms_left })}</span>}
                 </div>
               </div>
               <div className="room-card__price">
                 <span className="room-card__total">{formatMoney(room.total_price, room.currency)}</span>
-                <span className="room-card__nightly">
-                  {formatMoney(room.nightly_rate, room.currency)} / night avg.
-                </span>
+                <span className="room-card__nightly">{t('results.perNight', { price: formatMoney(room.nightly_rate, room.currency) })}</span>
               </div>
             </li>
           ))}
@@ -61,21 +57,21 @@ export function AvailabilityResults({ result, contactPhone, onChangeDates }: Pro
         <div className="availability__empty">
           <p>{result.message}</p>
           {result.sold_out_room_names.length > 0 && (
-            <p className="muted">Sold out for these dates: {result.sold_out_room_names.join(', ')}</p>
+            <p className="muted">{t('results.soldOut', { names: result.sold_out_room_names.join(', ') })}</p>
           )}
           <button type="button" className="btn btn--secondary" onClick={onChangeDates}>
-            Try different dates
+            {t('results.tryDates')}
           </button>
         </div>
       )}
 
       {result.available && (
         <p className="availability__footnote">
-          Prices exclude taxes and are not held until booked.
+          {t('results.footnote')}
           {contactPhone && (
             <>
               {' '}
-              To reserve, call <a href={`tel:${contactPhone.replace(/\s/g, '')}`}>{contactPhone}</a>.
+              {t('results.reserve')} <a href={`tel:${contactPhone.replace(/\s/g, '')}`}>{contactPhone}</a>.
             </>
           )}
         </p>

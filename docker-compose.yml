@@ -1,0 +1,32 @@
+# One-command local stack:  docker compose up --build   ->  http://localhost:8080
+# Without ANTHROPIC_API_KEY the assistant runs in offline (FAQ) mode. To enable AI, put the key in
+# backend/.env (never committed); it is read at runtime and is not baked into the image.
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      APP_ENV: development          # production validation requires real hotel origins for CORS
+      CORS_ORIGINS: http://localhost:8080
+      TRUST_PROXY_HEADERS: "true"   # nginx overwrites X-Forwarded-For with the real client IP
+      LOG_FORMAT: json
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: unless-stopped

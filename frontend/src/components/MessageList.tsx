@@ -1,24 +1,40 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ApiErrorKind } from '../api/client'
 import type { AvailabilityRequest, HotelInfo } from '../api/types'
 import type { UIMessage } from '../hooks/useChat'
+import { useI18n } from '../i18n/context'
+import type { MessageKey } from '../i18n/messages'
 import { AvailabilityForm } from './AvailabilityForm'
 import { AvailabilityResults } from './AvailabilityResults'
 
 const OPEN_FORM_SUGGESTIONS = new Set(['check room availability', 'try different dates'])
 const SLOW_RESPONSE_MS = 8000
+const ERROR_KEYS: Record<ApiErrorKind, MessageKey> = {
+  network: 'error.network',
+  timeout: 'error.timeout',
+  rate_limited: 'error.rateLimited',
+  validation: 'error.server',
+  not_found: 'error.server',
+  unavailable: 'error.server',
+  server: 'error.server',
+}
 
 interface Props {
   messages: UIMessage[]
   pending: boolean
   hotel: HotelInfo | null
   today: string
+  welcomeText: string
+  welcomeSuggestions: string[]
   onSuggestion: (text: string) => void
   onRetry: (errorId: string) => void
   onOpenBookingForm: () => void
   onCheckAvailability: (formMessageId: string, details: AvailabilityRequest) => Promise<void>
 }
 
-export function MessageList({ messages, pending, hotel, today, onSuggestion, onRetry, onOpenBookingForm, onCheckAvailability }: Props) {
+export function MessageList(props: Props) {
+  const { messages, pending, hotel, today, welcomeText, welcomeSuggestions, onSuggestion, onRetry, onOpenBookingForm, onCheckAvailability } = props
+  const { t } = useI18n()
   const endRef = useRef<HTMLDivElement>(null)
   const lastAssistantId = [...messages].reverse().find((m) => m.kind === 'assistant')?.id
   const lastMessageId = messages.at(-1)?.id
@@ -32,8 +48,25 @@ export function MessageList({ messages, pending, hotel, today, onSuggestion, onR
     else onSuggestion(text)
   }
 
+  const suggestionChips = (suggestions: string[]) => (
+    <div className="suggestions" aria-label={t('suggestions.label')}>
+      {suggestions.map((s) => (
+        <button key={s} type="button" className="chip" onClick={() => handleSuggestion(s)}>
+          {s}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
-    <div className="messages" role="log" aria-live="polite" aria-label="Conversation">
+    <div className="messages" role="log" aria-live="polite" aria-busy={pending} aria-label={t('conversation.label')} tabIndex={0}>
+      <div className="bubble-row">
+        <div className="bubble bubble--assistant">
+          <p className="bubble__text">{welcomeText}</p>
+        </div>
+        {messages.length === 0 && !pending && welcomeSuggestions.length > 0 && suggestionChips(welcomeSuggestions)}
+      </div>
+
       {messages.map((message) => {
         if (message.kind === 'user') {
           return (
@@ -47,10 +80,10 @@ export function MessageList({ messages, pending, hotel, today, onSuggestion, onR
           return (
             <div key={message.id} className="bubble-row">
               <div className="bubble bubble--error" role="alert">
-                <p>{message.text}</p>
+                <p>{t(ERROR_KEYS[message.errorKind])}</p>
                 {message.retryable && message.retryText && (
                   <button type="button" className="btn btn--secondary" onClick={() => onRetry(message.id)} disabled={pending}>
-                    Try again
+                    {t('error.retry')}
                   </button>
                 )}
               </div>
@@ -72,23 +105,24 @@ export function MessageList({ messages, pending, hotel, today, onSuggestion, onR
 
               {reply.type === 'fallback' && hotel && (
                 <p className="contact-links">
-                  <a href={`tel:${hotel.hotel.phone.replace(/\s/g, '')}`}>Call</a>
+                  <a href={`tel:${hotel.hotel.phone.replace(/\s/g, '')}`}>{t('contact.call')}</a>
                   <a href={`https://wa.me/${hotel.hotel.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">
-                    WhatsApp
+                    {t('contact.whatsapp')}
                   </a>
-                  <a href={`mailto:${hotel.hotel.email}`}>Email</a>
+                  <a href={`mailto:${hotel.hotel.email}`}>{t('contact.email')}</a>
                 </p>
               )}
 
               {reply.type === 'collect_booking_details' &&
                 (message.formSummary ? (
-                  <p className="form-summary">Searched: {message.formSummary}</p>
+                  <p className="form-summary">{t('form.searched', { summary: message.formSummary })}</p>
                 ) : (
                   <AvailabilityForm
                     today={today}
                     prefill={reply.booking_prefill}
                     serverError={reply.form_error}
                     disabled={pending}
+                    autoFocus={isLatest}
                     onSubmit={(details) => onCheckAvailability(message.id, details)}
                   />
                 ))}
@@ -99,20 +133,12 @@ export function MessageList({ messages, pending, hotel, today, onSuggestion, onR
 
               {reply.sources.length > 0 && (
                 <p className="sources">
-                  <span>Based on:</span> {reply.sources.map((s) => s.title).join(' · ')}
+                  <span>{t('sources.basedOn')}</span> {reply.sources.map((s) => s.title).join(' · ')}
                 </p>
               )}
             </div>
 
-            {isLatest && !pending && reply.suggestions.length > 0 && (
-              <div className="suggestions" aria-label="Suggested questions">
-                {reply.suggestions.map((s) => (
-                  <button key={s} type="button" className="chip" onClick={() => handleSuggestion(s)}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
+            {isLatest && !pending && reply.suggestions.length > 0 && suggestionChips(reply.suggestions)}
           </div>
         )
       })}
@@ -124,20 +150,21 @@ export function MessageList({ messages, pending, hotel, today, onSuggestion, onR
 }
 
 function TypingIndicator() {
+  const { t } = useI18n()
   const [slow, setSlow] = useState(false)
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), SLOW_RESPONSE_MS)
     return () => clearTimeout(timer)
   }, [])
   return (
-    <div className="bubble-row" role="status" aria-label="Assistant is typing">
+    <div className="bubble-row" role="status" aria-label={t('typing.label')}>
       <div className="bubble bubble--assistant bubble--typing">
         <span className="dots" aria-hidden="true">
           <span />
           <span />
           <span />
         </span>
-        <span className="typing-label">{slow ? 'Still working on it…' : 'Checking hotel information…'}</span>
+        <span className="typing-label">{slow ? t('typing.slow') : t('typing.checking')}</span>
       </div>
     </div>
   )

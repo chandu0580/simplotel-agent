@@ -1,0 +1,90 @@
+{
+  "hotel": {
+    "id": "hotel-blr-001",
+    "name": "Metro Business Hotel Whitefield",
+    "tagline": "A business hotel near ITPL, Bengaluru",
+    "address": "ITPL Main Road, Whitefield, Bengaluru, Karnataka 560066, India",
+    "city": "Whitefield, Bengaluru",
+    "phone": "+91 80 5550 0199",
+    "email": "frontdesk@metrobusiness.example",
+    "whatsapp": "+91 98450 55502",
+    "currency": "INR",
+    "timezone": "Asia/Kolkata",
+    "check_in_time": "15:00",
+    "check_out_time": "12:00",
+    "languages": ["en", "hi"],
+    "brand": { "assistant_name": "Metro Stays Assistant", "primary_color": "#1f3a8a" }
+  },
+  "rooms": [
+    {
+      "id": "executive-king",
+      "name": "Executive King Room",
+      "description": "Quiet room with a large work desk and fast Wi-Fi.",
+      "size_sqm": 28,
+      "beds": "1 king bed",
+      "max_adults": 2,
+      "max_children": 1,
+      "max_occupancy": 2,
+      "extra_bed_allowed": false,
+      "base_rate": 6400,
+      "breakfast_included": true,
+      "features": ["Work desk", "Blackout curtains", "Coffee machine"]
+    },
+    {
+      "id": "studio-suite",
+      "name": "Studio Suite",
+      "description": "Studio with a kitchenette for longer business stays.",
+      "size_sqm": 42,
+      "beds": "1 king bed + sofa bed",
+      "max_adults": 3,
+      "max_children": 1,
+      "max_occupancy": 3,
+      "extra_bed_allowed": false,
+      "base_rate": 9200,
+      "breakfast_included": true,
+      "features": ["Kitchenette", "Washer-dryer", "Lounge area"]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "timings.check_in_out",
+      "topic": "policies",
+      "title": "Check-in and check-out times",
+      "content": "Check-in is from 3:00 PM (15:00) and check-out is by 12:00 noon. Late check-out until 3:00 PM costs INR 2,000, subject to availability.",
+      "keywords": ["check-in", "check in", "checkin", "check-out", "check out", "checkout", "late", "time"],
+      "status": "published", "version": 1, "source": "hotel-cms", "updated_at": "2026-09-01T00:00:00Z", "updated_by": "content-team"
+    },
+    {
+      "id": "amenities.pool",
+      "topic": "amenities",
+      "title": "Swimming pool",
+      "content": "The hotel does not have a swimming pool. Guests can use the 24-hour gym on the second floor free of charge.",
+      "keywords": ["pool", "swim", "swimming", "gym"],
+      "status": "published", "version": 1, "source": "hotel-cms", "updated_at": "2026-09-01T00:00:00Z", "updated_by": "content-team"
+    },
+    {
+      "id": "policies.cancellation",
+      "topic": "policies",
+      "title": "Cancellation policy",
+      "content": "Bookings can be cancelled free of charge until 6:00 PM on the day before arrival. Later cancellations and no-shows are charged one night.",
+      "keywords": ["cancel", "cancellation", "refund", "no-show", "my booking"],
+      "status": "published", "version": 1, "source": "hotel-cms", "updated_at": "2026-09-01T00:00:00Z", "updated_by": "content-team"
+    },
+    {
+      "id": "amenities.dining",
+      "topic": "amenities",
+      "title": "Breakfast and dining",
+      "content": "Breakfast is included in all room rates and served from 6:30 AM to 10:00 AM at the Ledger Cafe, which also serves lunch and dinner until 11:00 PM.",
+      "keywords": ["breakfast", "restaurant", "dining", "food", "dinner", "lunch"],
+      "status": "published", "version": 1, "source": "hotel-cms", "updated_at": "2026-09-01T00:00:00Z", "updated_by": "content-team"
+    },
+    {
+      "id": "contact.front_desk",
+      "topic": "contact",
+      "title": "Contacting the hotel",
+      "content": "The front desk is available 24 hours: phone +91 80 5550 0199, WhatsApp +91 98450 55502, or email frontdesk@metrobusiness.example.",
+      "keywords": ["contact", "phone", "call", "email", "whatsapp", "reception", "front desk"],
+      "status": "published", "version": 1, "source": "hotel-cms", "updated_at": "2026-09-01T00:00:00Z", "updated_by": "content-team"
+    }
+  ]
+}

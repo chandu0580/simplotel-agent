@@ -1,6 +1,6 @@
 """API contract shared by the chat and availability endpoints."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -123,3 +123,79 @@ class ErrorBody(BaseModel):
 class ErrorResponse(BaseModel):
     request_id: str
     error: ErrorBody
+
+
+# ---------- API v1 ----------
+
+LOCALE_PATTERN = r"^[a-z]{2}(-[A-Z]{2})?$"
+
+
+class CreateConversationRequest(StrictModel):
+    locale: str | None = Field(default=None, pattern=LOCALE_PATTERN)
+
+
+class ConversationCreated(BaseModel):
+    conversation_id: str
+    hotel_id: str
+    channel: str
+    locale: str | None
+    expires_at: datetime
+
+
+class PostMessageRequest(StrictModel):
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    locale: str | None = Field(default=None, pattern=LOCALE_PATTERN)
+
+    @field_validator("message")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message must not be blank")
+        return v.strip()
+
+
+class ResponseMeta(BaseModel):
+    trace_id: str
+    prompt_version: str | None = None
+    tool_schema_version: str | None = None
+    knowledge_version: str | None = None
+
+
+class ConversationTurnResponse(BaseModel):
+    request_id: str
+    conversation_id: str
+    mode: Literal["ai", "offline"]
+    reply: ChatReply
+    notice: str | None = None
+    meta: ResponseMeta
+
+
+class MessageView(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    reply_type: str | None = None
+    created_at: datetime
+
+
+class ConversationView(BaseModel):
+    conversation_id: str
+    hotel_id: str
+    channel: str
+    locale: str | None
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime
+    active_intent: str | None
+    availability_context: BookingContext | None
+    messages: list[MessageView]
+
+
+class V1ErrorBody(BaseModel):
+    code: str
+    message: str
+    request_id: str
+    details: list[dict] | None = None
+
+
+class V1ErrorResponse(BaseModel):
+    error: V1ErrorBody

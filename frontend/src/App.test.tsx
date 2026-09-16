@@ -1,45 +1,50 @@
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
-import type { AvailabilityResult, ChatReply, ChatResponse } from './api/types'
+import type { AvailabilityResult, ChatReply, ConversationTurnResponse } from './api/types'
+import { I18nProvider } from './i18n'
 
 type Handler = (body: unknown) => Promise<Response> | Response
 
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } })
 
 const hotelInfo = {
   hotel: {
+    id: 'hotel-goa-001',
     name: 'The Palm Grove Resort',
     tagline: 'A beachside retreat',
+    city: 'Candolim, Goa',
     phone: '+91 832 555 0142',
     email: 'stay@palmgroveresort.example',
     whatsapp: '+91 98220 55501',
     currency: 'INR',
     check_in_time: '14:00',
     check_out_time: '11:00',
+    languages: ['en', 'hi'],
+    brand: { assistant_name: 'Palm Grove Assistant', primary_color: '#0f5d4e' },
   },
   today: '2026-10-05',
   max_guests: 5,
   suggested_questions: [],
+  features: { ai_assistant: true },
 }
 
 function reply(overrides: Partial<ChatReply>): ChatReply {
-  return {
-    type: 'answer',
-    text: '',
-    sources: [],
-    suggestions: [],
-    availability: null,
-    booking_prefill: null,
-    form_error: null,
-    ...overrides,
-  }
+  return { type: 'answer', text: '', sources: [], suggestions: [], availability: null, booking_prefill: null, form_error: null, ...overrides }
 }
 
-function chatResponse(r: Partial<ChatReply>, extra: Partial<ChatResponse> = {}): ChatResponse {
-  return { request_id: 'req1', mode: 'ai', notice: null, reply: reply(r), ...extra }
+function turn(r: Partial<ChatReply>, extra: Partial<ConversationTurnResponse> = {}): ConversationTurnResponse {
+  return {
+    request_id: 'req1',
+    conversation_id: 'conv_1',
+    mode: 'ai',
+    notice: null,
+    reply: reply(r),
+    meta: { trace_id: 't', prompt_version: 'p', tool_schema_version: 's', knowledge_version: 'k' },
+    ...extra,
+  }
 }
 
 const availabilityResult: AvailabilityResult = {
@@ -70,16 +75,23 @@ const availabilityResult: AvailabilityResult = {
   season_label: null,
 }
 
-/** Routes fetch calls by path and records request bodies. */
-function mockApi(routes: { chat?: Handler[]; availability?: Handler[] }) {
-  const calls: { path: string; body: unknown }[] = []
-  const queues = { chat: [...(routes.chat ?? [])], availability: [...(routes.availability ?? [])] }
+/** Routes fetch calls for the v1 API by path and records them. */
+function mockApi(routes: { messages?: Handler[]; availability?: Handler[]; conversations?: Handler[] }) {
+  const calls: { method: string; path: string; body: unknown }[] = []
+  const queues = { messages: [...(routes.messages ?? [])], availability: [...(routes.availability ?? [])], conversations: [...(routes.conversations ?? [])] }
+  let created = 0
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
-    calls.push({ path, body })
-    if (path.endsWith('/api/hotel')) return json(200, hotelInfo)
-    const key = path.endsWith('/api/chat') ? 'chat' : 'availability'
+    calls.push({ method: init?.method ?? 'GET', path, body })
+    if (path.endsWith('/api/v1/hotels/hotel-goa-001')) return json(200, hotelInfo)
+    if (path.endsWith('/conversations')) {
+      const handler = queues.conversations.shift()
+      if (handler) return handler(body)
+      created += 1
+      return json(201, { conversation_id: `conv_${created}`, hotel_id: 'hotel-goa-001', channel: 'web', locale: 'en', expires_at: '2026-10-06T00:00:00Z' })
+    }
+    const key = path.endsWith('/messages') ? 'messages' : 'availability'
     const handler = queues[key].shift()
     if (!handler) throw new Error(`Unexpected call to ${path}`)
     return handler(body)
@@ -94,6 +106,14 @@ function deferred() {
   return { promise, resolve }
 }
 
+function renderApp() {
+  return render(
+    <I18nProvider initialLocale="en">
+      <App />
+    </I18nProvider>,
+  )
+}
+
 async function ask(text: string) {
   const user = userEvent.setup()
   await user.type(screen.getByLabelText('Ask a question'), text)
@@ -101,31 +121,28 @@ async function ask(text: string) {
   return user
 }
 
+const messageCalls = <T extends { path: string }>(calls: T[]) => calls.filter((c) => c.path.endsWith('/messages'))
+
 describe('Guest assistant chat', () => {
   it('shows a loading state, then the answer with its sources', async () => {
     const pending = deferred()
-    mockApi({ chat: [() => pending.promise] })
-    render(<App />)
+    mockApi({ messages: [() => pending.promise] })
+    renderApp()
 
     await ask('What time is check-in?')
 
     expect(screen.getByText('What time is check-in?')).toBeInTheDocument()
     expect(screen.getByRole('status', { name: 'Assistant is typing' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+    expect(screen.getByRole('log', { name: 'Conversation' })).toHaveAttribute('aria-busy', 'true')
 
     pending.resolve(
-      json(
-        200,
-        chatResponse({
-          text: 'Check-in is from 2:00 PM.',
-          sources: [{ id: 'timings.check_in_out', title: 'Check-in and check-out times' }],
-          suggestions: ['Can I check in early?'],
-        }),
-      ),
+      json(200, turn({ text: 'Check-in is from 2:00 PM.', sources: [{ id: 'timings.check_in_out', title: 'Check-in and check-out times' }], suggestions: ['Can I check in early?'] })),
     )
 
     expect(await screen.findByText('Check-in is from 2:00 PM.')).toBeInTheDocument()
     expect(screen.queryByRole('status', { name: 'Assistant is typing' })).not.toBeInTheDocument()
+    expect(screen.getByRole('log', { name: 'Conversation' })).toHaveAttribute('aria-busy', 'false')
     expect(screen.getByText(/Check-in and check-out times/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Can I check in early?' })).toBeInTheDocument()
     expect(screen.getByText('AI assistant')).toBeInTheDocument()
@@ -133,12 +150,9 @@ describe('Guest assistant chat', () => {
 
   it('shows a retryable error when the backend is unreachable, and retries without duplicating the question', async () => {
     const calls = mockApi({
-      chat: [
-        () => Promise.reject(new TypeError('Failed to fetch')),
-        () => json(200, chatResponse({ text: 'Yes, we have an outdoor pool.' })),
-      ],
+      messages: [() => Promise.reject(new TypeError('Failed to fetch')), () => json(200, turn({ text: 'Yes, we have an outdoor pool.' }))],
     })
-    render(<App />)
+    renderApp()
 
     const user = await ask('Do you have a pool?')
 
@@ -149,12 +163,12 @@ describe('Guest assistant chat', () => {
     expect(await screen.findByText('Yes, we have an outdoor pool.')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getAllByText('Do you have a pool?')).toHaveLength(1)
-    expect(calls.filter((c) => c.path.endsWith('/api/chat'))).toHaveLength(2)
+    expect(messageCalls(calls)).toHaveLength(2)
   })
 
   it('shows a friendly message for server errors without leaking details', async () => {
-    mockApi({ chat: [() => json(500, { request_id: 'r', error: { code: 'internal_error', message: 'Traceback...' } })] })
-    render(<App />)
+    mockApi({ messages: [() => json(500, { error: { code: 'INTERNAL_ERROR', message: 'Traceback...', request_id: 'r' } })] })
+    renderApp()
 
     await ask('hello')
 
@@ -163,20 +177,22 @@ describe('Guest assistant chat', () => {
     expect(alert).not.toHaveTextContent('Traceback')
   })
 
+  it('explains rate limiting and lets the guest retry', async () => {
+    mockApi({ messages: [() => json(429, { error: { code: 'RATE_LIMITED', message: 'Too many', request_id: 'r' } }, { 'Retry-After': '7' })] })
+    renderApp()
+
+    await ask('hello')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent("You're sending messages quickly")
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
   it('shows the FAQ-mode notice when the AI is degraded', async () => {
     mockApi({
-      chat: [
-        () =>
-          json(
-            200,
-            chatResponse(
-              { text: 'Breakfast is served 7–10:30 AM.' },
-              { mode: 'offline', notice: 'Our AI assistant is temporarily unavailable.' },
-            ),
-          ),
-      ],
+      messages: [() => json(200, turn({ text: 'Breakfast is served 7–10:30 AM.' }, { mode: 'offline', notice: 'Our AI assistant is temporarily unavailable.' }))],
     })
-    render(<App />)
+    renderApp()
 
     await ask('Is breakfast included?')
 
@@ -184,86 +200,59 @@ describe('Guest assistant chat', () => {
     expect(screen.getByText('FAQ mode')).toBeInTheDocument()
   })
 
-  it('sends conversation history and booking context on follow-up questions', async () => {
+  it('keeps one server-side conversation and sends only the new message', async () => {
     const calls = mockApi({
-      chat: [
-        () =>
-          json(
-            200,
-            chatResponse({ type: 'availability', text: availabilityResult.message, availability: availabilityResult }),
-          ),
-        () => json(200, chatResponse({ text: 'Yes, breakfast is included in that room.' })),
-      ],
+      messages: [() => json(200, turn({ text: 'The Deluxe Pool View Room sleeps three.' })), () => json(200, turn({ text: 'Yes, breakfast is included in that room.' }))],
     })
-    render(<App />)
+    renderApp()
 
-    await ask('Rooms for 2 adults 7 to 9 Oct?')
-    await screen.findByText('Deluxe Pool View Room')
+    await ask('Which room is suitable for three guests?')
+    await screen.findByText('The Deluxe Pool View Room sleeps three.')
     await ask('Does it include breakfast?')
     await screen.findByText('Yes, breakfast is included in that room.')
 
-    const followUp = calls.filter((c) => c.path.endsWith('/api/chat'))[1].body as {
-      message: string
-      history: { role: string; content: string }[]
-      booking_context: Record<string, unknown>
-    }
-    expect(followUp.message).toBe('Does it include breakfast?')
-    expect(followUp.history.slice(-2)).toEqual([
-      { role: 'user', content: 'Rooms for 2 adults 7 to 9 Oct?' },
-      { role: 'assistant', content: availabilityResult.message },
-    ])
-    expect(followUp.booking_context).toEqual({ check_in: '2026-10-07', check_out: '2026-10-09', adults: 2, children: 0 })
+    expect(calls.filter((c) => c.path.endsWith('/conversations'))).toHaveLength(1)
+    const [first, second] = messageCalls(calls)
+    expect(first.path).toBe(second.path)
+    expect(second.path).toContain('/api/v1/hotels/hotel-goa-001/conversations/conv_1/messages')
+    expect(second.body).toEqual({ message: 'Does it include breakfast?', locale: 'en' })
   })
-})
 
-describe('Booking context follow-ups', () => {
-  it('remembers dates from a details request so "3 adults." can complete the search', async () => {
+  it('recreates an expired conversation transparently', async () => {
     const calls = mockApi({
-      chat: [
-        () =>
-          json(
-            200,
-            chatResponse({
-              type: 'collect_booking_details',
-              text: 'How many guests?',
-              booking_prefill: { check_in: '2026-10-10', check_out: '2026-10-12', adults: null, children: null },
-            }),
-          ),
-        () => json(200, chatResponse({ type: 'availability', text: availabilityResult.message, availability: availabilityResult })),
+      messages: [
+        () => json(404, { error: { code: 'CONVERSATION_NOT_FOUND', message: 'expired', request_id: 'r' } }),
+        () => json(200, turn({ text: 'Check-out is by 11:00 AM.' })),
       ],
     })
-    render(<App />)
+    renderApp()
 
-    await ask('Do you have rooms for October 10 to October 12?')
-    await screen.findByText('How many guests?')
-    await ask('3 adults.')
-    await screen.findByText('Deluxe Pool View Room')
+    await ask('What time is check-out?')
 
-    const followUp = calls.filter((c) => c.path.endsWith('/api/chat'))[1].body as { booking_context: Record<string, unknown> }
-    expect(followUp.booking_context).toEqual({ check_in: '2026-10-10', check_out: '2026-10-12' })
+    expect(await screen.findByText('Check-out is by 11:00 AM.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(calls.filter((c) => c.path.endsWith('/conversations'))).toHaveLength(2)
+    expect(messageCalls(calls)[1].path).toContain('/conversations/conv_2/messages')
   })
 })
 
 describe('Availability flow', () => {
   it('collects details in a form, calls the availability API and renders room cards', async () => {
     const calls = mockApi({
-      chat: [
+      messages: [
         () =>
           json(
             200,
-            chatResponse({
-              type: 'collect_booking_details',
-              text: 'Which dates would you like?',
-              booking_prefill: { check_in: null, check_out: null, adults: 2, children: null },
-            }),
+            turn({ type: 'collect_booking_details', text: 'Which dates would you like?', booking_prefill: { check_in: null, check_out: null, adults: 2, children: null } }),
           ),
       ],
       availability: [() => json(200, availabilityResult)],
     })
-    render(<App />)
+    renderApp()
     const user = await ask('Do you have rooms available?')
 
     const form = await screen.findByRole('form', { name: 'Check availability' })
+    await waitFor(() => expect(within(form).getByLabelText('Check-in')).toHaveFocus())
     const submit = within(form).getByRole('button', { name: /check/i })
     expect(submit).toBeDisabled()
 
@@ -277,21 +266,16 @@ describe('Availability flow', () => {
     expect(screen.getByText('Breakfast included')).toBeInTheDocument()
     expect(screen.getByText('Only 2 left')).toBeInTheDocument()
     expect(screen.queryByRole('form', { name: 'Check availability' })).not.toBeInTheDocument()
-    expect(calls.find((c) => c.path.endsWith('/api/availability'))?.body).toEqual({
-      check_in: '2026-10-07',
-      check_out: '2026-10-09',
-      adults: 2,
-      children: 0,
-    })
+    const availabilityCall = calls.find((c) => c.path.endsWith('/availability'))
+    expect(availabilityCall?.path).toContain('/conversations/conv_1/availability')
+    expect(availabilityCall?.body).toEqual({ check_in: '2026-10-07', check_out: '2026-10-09', adults: 2, children: 0 })
   })
 
   it('validates dates before submitting and shows backend validation errors in the form', async () => {
     mockApi({
-      availability: [
-        () => json(422, { request_id: 'r', error: { code: 'invalid_booking_details', message: 'Bookings open 12 months in advance.' } }),
-      ],
+      availability: [() => json(422, { error: { code: 'INVALID_BOOKING_DETAILS', message: 'Bookings open 12 months in advance.', request_id: 'r' } })],
     })
-    render(<App />)
+    renderApp()
     const user = userEvent.setup()
 
     await user.click(screen.getByRole('button', { name: /Check availability/ }))
@@ -311,30 +295,61 @@ describe('Availability flow', () => {
 
   it('shows a sold-out state with a way to try other dates', async () => {
     mockApi({
-      chat: [
+      messages: [
         () =>
           json(
             200,
-            chatResponse({
+            turn({
               type: 'availability',
               text: 'Sorry, all suitable rooms are sold out.',
-              availability: {
-                ...availabilityResult,
-                available: false,
-                rooms: [],
-                sold_out_room_names: ['Family Suite'],
-                message: 'Sorry, all suitable rooms are sold out.',
-              },
+              availability: { ...availabilityResult, available: false, rooms: [], sold_out_room_names: ['Family Suite'], message: 'Sorry, all suitable rooms are sold out.' },
             }),
           ),
       ],
     })
-    render(<App />)
+    renderApp()
     const user = await ask('Family suite this Saturday for 5?')
 
     expect(await screen.findByText('Sorry, all suitable rooms are sold out.')).toBeInTheDocument()
     expect(screen.getByText(/Sold out for these dates: Family Suite/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Try different dates' }))
     expect(await screen.findByRole('form', { name: 'Check availability' })).toBeInTheDocument()
+  })
+})
+
+describe('Localisation, branding and connectivity', () => {
+  it('switches the interface to Hindi and sends the locale with messages', async () => {
+    const calls = mockApi({ messages: [() => json(200, turn({ text: 'चेक-इन दोपहर 2 बजे से है।' }))] })
+    renderApp()
+    const user = userEvent.setup()
+
+    await user.selectOptions(await screen.findByLabelText('Language'), 'hi')
+
+    expect(document.documentElement.lang).toBe('hi')
+    expect(screen.getByRole('button', { name: 'संदेश भेजें' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('प्रश्न पूछें'), 'चेक-इन कब है?')
+    await user.click(screen.getByRole('button', { name: 'संदेश भेजें' }))
+
+    expect(await screen.findByText('चेक-इन दोपहर 2 बजे से है।')).toBeInTheDocument()
+    expect(messageCalls(calls)[0].body).toEqual({ message: 'चेक-इन कब है?', locale: 'hi' })
+  })
+
+  it('shows hotel branding from the API', async () => {
+    mockApi({})
+    renderApp()
+    expect(await screen.findByText("Hi! I'm Palm Grove Assistant for The Palm Grove Resort. Ask me about rooms, amenities and policies, or check room availability for your dates.")).toBeInTheDocument()
+  })
+
+  it('announces when the guest goes offline', async () => {
+    mockApi({})
+    renderApp()
+    act(() => {
+      window.dispatchEvent(new Event('offline'))
+    })
+    expect(await screen.findByText(/You're offline/)).toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await waitFor(() => expect(screen.queryByText(/You're offline/)).not.toBeInTheDocument())
   })
 })

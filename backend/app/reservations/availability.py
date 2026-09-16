@@ -4,19 +4,17 @@ Everything that must be *correct* (date validation, occupancy fit, inventory,
 pricing) lives here, never in the LLM. The LLM only decides *when* to call it.
 """
 
-from datetime import date, datetime, timedelta, timezone
-from functools import lru_cache
+from datetime import date, timedelta
 import json
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from .knowledge import DATA_DIR, KnowledgeBase, Room, get_knowledge_base
-from .schemas import AvailabilityResult, RoomOffer
+from ..knowledge.models import KnowledgeBase, Room
+from ..schemas import AvailabilityResult, RoomOffer
 
 MAX_NIGHTS = 30
 MAX_DAYS_AHEAD = 365
-HOTEL_TZ = timezone(timedelta(hours=5, minutes=30))  # Asia/Kolkata, no DST
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 
@@ -60,15 +58,10 @@ class Inventory(BaseModel):
         return next((s for s in self.seasonal_multipliers if s.applies(night)), None)
 
 
-@lru_cache
-def get_inventory() -> Inventory:
-    raw = json.loads((DATA_DIR / "inventory.json").read_text(encoding="utf-8"))
+def load_inventory(path: Path) -> Inventory:
+    raw = json.loads(path.read_text(encoding="utf-8"))
     raw.pop("_comment", None)
     return Inventory(**raw)
-
-
-def hotel_today() -> date:
-    return datetime.now(HOTEL_TZ).date()
 
 
 def _fits(room: Room, adults: int, children: int) -> bool:
@@ -96,13 +89,10 @@ def check_availability(
     adults: int,
     children: int = 0,
     *,
-    today: date | None = None,
-    kb: KnowledgeBase | None = None,
-    inventory: Inventory | None = None,
+    today: date,
+    kb: KnowledgeBase,
+    inventory: Inventory,
 ) -> AvailabilityResult:
-    kb = kb or get_knowledge_base()
-    inventory = inventory or get_inventory()
-    today = today or hotel_today()
     validate_search(check_in, check_out, adults, children, today)
 
     nights = [check_in + timedelta(days=i) for i in range((check_out - check_in).days)]

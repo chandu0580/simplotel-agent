@@ -160,15 +160,15 @@ These are **proposed** metrics. Nothing here has been measured in production.
 
 **Why not a vector database or RAG?** The knowledge base is about 2.8k tokens and fits entirely in the prompt, so retrieval would add a component that can *miss* the right entry, plus an embedding pipeline to maintain, and remove no hallucination risk. A production system with large or multi-property content (long policy documents, local guides) would add semantic retrieval, keeping the same citation check.
 
-**Why is the answer a tool call?** One decision per turn: answer, check availability, or ask for details, each with a strict schema. It doesn't depend on a provider supporting a JSON output format and tool calls in the same request. A real development model stopped calling tools when both were enabled. Details in [ARCHITECTURE.md](ARCHITECTURE.md#why-the-answer-is-a-tool-not-a-json-output-format).
+**Why is the answer a tool call?** One decision per turn: answer, check availability, or ask for details, each with a strict schema. It doesn't depend on a provider supporting a JSON output format and tool calls in the same request. The first version combined the two; when the unchanged code path was pointed at a different real model during development (`glm-5.2`, not Claude), that model never called a tool while the output format was set (0 of 4 probes) and chose the right tool 4 of 4 times without it. Anthropic documents the combination as supported, so this is a portability and robustness choice, not a verified Claude fix.
 
 **Why use an LLM at all?** Guests phrase things freely: "we're 2 + a kid", "next weekend", "does *it* include breakfast?". An LLM handles paraphrase, follow-ups, false premises, relative dates and choosing between answering and checking availability far better than rules. The offline engine shows what rules alone give you: correct but literal, and date handling limited to ISO format.
 
 ## Engineering choices worth defending
 
 - **FastAPI + Pydantic:** request validation, OpenAPI docs and typed schemas with almost no boilerplate. The API contract lives in one file, `schemas.py`, and the frontend's `types.ts` mirrors it.
-- **Stateless backend with client-sent history:** the simplest thing that works for a demo, and it scales horizontally. The weakness is that the client can forge history. That's acceptable here, because history only affects wording, never prices or availability. Server-side sessions are listed under production improvements.
-- **One LLM call per turn instead of an agent loop:** every tool result is final, so a loop would add latency and cost without adding value. See [ARCHITECTURE.md](ARCHITECTURE.md#why-one-call-instead-of-an-agent-loop).
+- **Server-side conversations (v1):** the original assignment API was stateless and trusted client-sent history, which was fine for a demo but let a client forge history. The v1 API keeps history and booking context on the server, keyed by tenant, hotel and conversation id, with expiry and guest deletion. The legacy `/api/chat` endpoint still accepts client history for backward compatibility and is marked deprecated.
+- **One LLM call per turn instead of an agent loop:** every tool result is final. Availability results go straight to the UI, and the details form is itself the reply, so there is nothing to feed back to the model. A loop would add latency and cost without adding value, and numbers would be paraphrased by the model.
 - **Offline engine as a real fallback, not an error page:** it also lets the whole app, E2E tests and evals run with no API key and no cost.
 - **Model choice:** `claude-opus-5` for the best judgment on grounding and ambiguity, run at `effort: low` to keep chat latency down. The model and effort are environment settings, so they can be tuned from eval results without code changes.
 - **Server-side refusal fallback** (`fallbacks: "default"`): if the model declines a request, the API retries on a fallback model instead of failing the guest's turn.
@@ -176,4 +176,26 @@ These are **proposed** metrics. Nothing here has been measured in production.
   - pytest with a fake Anthropic client covers business logic, the API contract, tool handling, grounding checks and every failure path.
   - Vitest and Testing Library cover the UI states.
   - Playwright covers the real integrated stack on desktop and mobile.
-  - A separate eval runner measures model behaviour against live Claude.
+  - A separate eval runner measures model behaviour. It has been run offline and against a development provider (GLM); it has not yet been run against the live Claude API.
+
+## Enterprise evolution decisions
+
+After the assignment, the codebase was evolved into an enterprise architecture foundation. The main decisions:
+
+- **Modular monolith, not microservices.** There is one deployable, with packages behind interfaces and one composition root (`app/container.py`). Service extraction waits for a measured reason: independent scaling, team ownership, or a different release cadence. Kafka, Kubernetes, a service mesh and CQRS were deliberately not introduced.
+- **Interfaces where an implementation will change, not everywhere.** `LLMProvider`, `KnowledgeProvider`, `Retriever`, `ReservationProvider`, `ConversationRepository`, `RateLimiter`, `Cache`, `TraceSink`, `EventPublisher` and `AuthProvider` each have a real second implementation today (usually a test or resilience wrapper) or a named production successor.
+- **Multi-tenancy from the request inwards.** Every request resolves a `TenantContext` before touching data. Repositories are keyed by tenant and hotel, and a second demo tenant exists so isolation is tested for real. A hotel of another tenant returns the same 404 as a hotel that doesn't exist.
+- **No fake authentication.** Admin endpoints return 401 `AUTH_NOT_CONFIGURED` by default. A static-token provider exists for local development only and is rejected by production configuration validation. Production authentication is OIDC/JWT, documented but not built.
+- **Mutations designed, not exposed.** `create_booking` exists to exercise authorization, guest confirmation, idempotency and audit end to end. It is behind a flag and never offered to the model.
+- **Readiness means "can serve guests".** A reservation-system outage is reported as degraded but keeps instances in service. Every replica shares the same PMS, so failing readiness would remove all of them and also stop FAQ answers that still work.
+- **Low-cardinality metrics.** Metrics have no tenant or hotel labels, because thousands of hotels would multiply series counts. Per-tenant analytics come from structured traces and events.
+- **Deterministic guardrails plus evals, not an LLM judge in the request path.** Deterministic checks stop what must never reach a guest (secrets, prompt leakage, uncited answers, fabricated prices and inventory). Semantic grounding quality is measured by the eval suite, which records structured decisions, evidence and versions. An LLM judge on sampled traffic is a production next step.
+- **Versions on every answer.** Prompt, tool-schema and knowledge versions appear in traces, API responses, admin configuration and eval results, so production behaviour can be traced back to what produced it.
+- **Review-driven hardening.** Independent reviews of the enterprise changes found real issues, which were fixed with regression tests:
+  - Prompt-tag injection through replayed history.
+  - Security headers silently dropped by nginx.
+  - Rate limiting that skipped unknown-hotel probes.
+  - Lost messages under concurrent turns.
+  - A liveness check that shared the request thread pool.
+  - A readiness check that would have removed every replica during a PMS outage.
+  - Cache-write tokens missing from cost accounting.

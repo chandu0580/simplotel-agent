@@ -1,17 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { api } from './api/client'
 import type { HotelInfo } from './api/types'
 import { Composer } from './components/Composer'
 import { MessageList } from './components/MessageList'
-import { toISODate } from './format'
-import { useChat, welcomeMessage } from './hooks/useChat'
+import { formatShortDate, partyLabel, toISODate } from './format'
+import { useChat } from './hooks/useChat'
+import { useOnlineStatus } from './hooks/useOnlineStatus'
+import { useI18n } from './i18n/context'
+import { LOCALE_NAMES, SUPPORTED_LOCALES, type Locale } from './i18n/messages'
 
 const DEFAULT_HOTEL_NAME = 'The Palm Grove Resort'
+const DEFAULT_ASSISTANT_NAME = 'the virtual assistant'
 const DEFAULT_SUGGESTIONS = ['What time is check-in?', 'Is breakfast included?', 'Check room availability']
 
 export default function App() {
+  const { t, locale, setLocale, dateLocale } = useI18n()
   const [hotel, setHotel] = useState<HotelInfo | null>(null)
-  const chat = useChat([welcomeMessage(DEFAULT_HOTEL_NAME, DEFAULT_SUGGESTIONS)])
+  const chat = useChat(locale)
+  const online = useOnlineStatus()
 
   useEffect(() => {
     // The chat still works if this fails; the header just uses defaults.
@@ -19,41 +25,65 @@ export default function App() {
   }, [])
 
   const hotelName = hotel?.hotel.name ?? DEFAULT_HOTEL_NAME
+  const assistantName = hotel?.hotel.brand.assistant_name ?? DEFAULT_ASSISTANT_NAME
   const today = hotel?.today ?? toISODate(new Date())
+  const languages = SUPPORTED_LOCALES.filter((l) => (hotel?.hotel.languages ?? ['en']).includes(l))
+  const brandStyle = hotel ? ({ '--primary': hotel.hotel.brand.primary_color } as CSSProperties) : undefined
 
   return (
-    <div className="app">
-      <main className="chat" aria-label={`${hotelName} guest assistant`}>
+    <div className="app" style={brandStyle}>
+      <main className="chat" aria-label={t('app.label', { hotel: hotelName })}>
         <header className="chat__header">
           <div className="chat__avatar" aria-hidden="true">
             🌴
           </div>
           <div className="chat__title">
             <h1>{hotelName}</h1>
-            <p>{hotel?.hotel.tagline ?? 'Guest assistant'}</p>
+            <p>{hotel ? `${assistantName} · ${hotel.hotel.tagline}` : t('header.fallbackTagline')}</p>
           </div>
+          {languages.length > 1 && (
+            <label className="language">
+              <span className="visually-hidden">{t('language.label')}</span>
+              <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
+                {languages.map((l) => (
+                  <option key={l} value={l}>
+                    {LOCALE_NAMES[l]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {chat.mode && (
-            <span className={`status status--${chat.mode}`} title={chat.mode === 'ai' ? 'AI assistant online' : 'Answering from hotel FAQ'}>
-              {chat.mode === 'ai' ? 'AI assistant' : 'FAQ mode'}
+            <span className={`status status--${chat.mode}`} title={chat.mode === 'ai' ? t('status.aiTitle') : t('status.offlineTitle')}>
+              {chat.mode === 'ai' ? t('status.ai') : t('status.offline')}
             </span>
           )}
         </header>
+
+        {!online && (
+          <p className="connection-banner" role="status">
+            {t('connection.offline')}
+          </p>
+        )}
 
         <MessageList
           messages={chat.messages}
           pending={chat.pending}
           hotel={hotel}
           today={today}
+          welcomeText={t('welcome', { assistant: assistantName, hotel: hotelName })}
+          welcomeSuggestions={DEFAULT_SUGGESTIONS}
           onSuggestion={chat.send}
           onRetry={chat.retry}
-          onOpenBookingForm={chat.openBookingForm}
-          onCheckAvailability={chat.checkAvailability}
+          onOpenBookingForm={() => chat.openBookingForm(t('form.prompt'))}
+          onCheckAvailability={(formId, details) => {
+            const summary = `${formatShortDate(details.check_in, dateLocale)} – ${formatShortDate(details.check_out, dateLocale)} · ${partyLabel(t, details.adults, details.children)}`
+            return chat.checkAvailability(formId, details, summary, t('form.userSummary', { summary }))
+          }}
         />
 
-        <Composer pending={chat.pending} onSend={chat.send} onOpenBookingForm={chat.openBookingForm} />
-        <p className="disclaimer">
-          AI answers are based on hotel information and may occasionally be incomplete. Please confirm important details with the front desk.
-        </p>
+        <Composer pending={chat.pending} onSend={chat.send} onOpenBookingForm={() => chat.openBookingForm(t('form.prompt'))} />
+        <p className="disclaimer">{t('disclaimer')}</p>
       </main>
     </div>
   )

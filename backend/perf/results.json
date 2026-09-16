@@ -1,0 +1,66 @@
+{
+  "environment": {
+    "python": "3.13.3",
+    "machine": "AMD64",
+    "system": "Windows 11",
+    "date": "2026-09-16"
+  },
+  "results": {
+    "retrieval_full_context": {
+      "p50_ms": 0.029,
+      "p95_ms": 0.036,
+      "max_ms": 0.09,
+      "mean_ms": 0.03,
+      "iterations": 300
+    },
+    "retrieval_keyword": {
+      "p50_ms": 0.554,
+      "p95_ms": 1.168,
+      "max_ms": 2.361,
+      "mean_ms": 0.631,
+      "iterations": 300
+    },
+    "tool_check_availability_3_nights": {
+      "p50_ms": 1.95,
+      "p95_ms": 5.203,
+      "max_ms": 12.639,
+      "mean_ms": 2.484,
+      "iterations": 300
+    },
+    "assistant_turn_ai_scripted_model": {
+      "p50_ms": 2.149,
+      "p95_ms": 4.049,
+      "max_ms": 6.98,
+      "mean_ms": 2.396,
+      "iterations": 300
+    },
+    "assistant_turn_offline": {
+      "p50_ms": 2.568,
+      "p95_ms": 5.846,
+      "max_ms": 13.37,
+      "mean_ms": 3.044,
+      "iterations": 300
+    },
+    "http_conversation_message_offline": {
+      "p50_ms": 8.563,
+      "p95_ms": 10.975,
+      "max_ms": 14.92,
+      "mean_ms": 8.799,
+      "iterations": 300
+    },
+    "http_availability": {
+      "p50_ms": 7.197,
+      "p95_ms": 10.298,
+      "max_ms": 14.044,
+      "mean_ms": 7.499,
+      "iterations": 300
+    },
+    "http_health": {
+      "p50_ms": 4.385,
+      "p95_ms": 7.81,
+      "max_ms": 12.468,
+      "mean_ms": 4.834,
+      "iterations": 300
+    }
+  }
+}

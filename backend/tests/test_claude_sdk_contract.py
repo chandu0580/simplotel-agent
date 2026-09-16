@@ -12,9 +12,10 @@ import anthropic
 import httpx2
 import pytest
 
-from app.claude_assistant import FALLBACK_BETA, ClaudeAssistant, LLMError
-from app.schemas import BookingContext, ChatRequest
-from tests.conftest import TODAY
+from app.assistant.turn import LLMError
+from app.llm.anthropic_provider import FALLBACK_BETA
+from app.schemas import BookingContext
+from tests.conftest import ai_reply, make_container
 
 
 def _message(content: list[dict], stop_reason: str) -> dict:
@@ -30,6 +31,16 @@ def _message(content: list[dict], stop_reason: str) -> dict:
     }
 
 
+class _Assistant:
+    """Wraps a container so tests read like `assistant.reply(message)`."""
+
+    def __init__(self, container):
+        self.container = container
+
+    def reply(self, message, **kwargs):
+        return ai_reply(self.container, message, **kwargs)
+
+
 def _assistant(kb, handler, refusal_fallback="default"):
     captured: list[httpx2.Request] = []
 
@@ -43,7 +54,9 @@ def _assistant(kb, handler, refusal_fallback="default"):
         max_retries=0,
         http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(transport)),
     )
-    return ClaudeAssistant(kb, client.beta.messages, model="claude-opus-5", effort="low", refusal_fallback=refusal_fallback), captured
+    container = make_container(client.beta.messages)
+    container.llm_provider.refusal_fallback = refusal_fallback
+    return _Assistant(container), captured
 
 
 def _answer_block(answer: dict) -> dict:
@@ -54,7 +67,7 @@ def test_request_on_the_wire_matches_the_messages_api_contract(kb):
     answer = {"type": "answer", "text": "Check-in is from 2:00 PM.", "source_ids": ["timings.check_in_out"], "suggestions": []}
     assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")))
 
-    reply = assistant.reply(ChatRequest(message="What time is check-in?"), TODAY)
+    reply = assistant.reply("What time is check-in?")
 
     assert reply.type == "answer" and reply.sources[0].id == "timings.check_in_out"
     request = captured[0]
@@ -77,7 +90,7 @@ def test_refusal_fallback_can_be_disabled(kb):
     answer = {"type": "clarification", "text": "Hello!", "source_ids": [], "suggestions": []}
     assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")), refusal_fallback="none")
 
-    assistant.reply(ChatRequest(message="hi"), TODAY)
+    assistant.reply("hi")
 
     body = json.loads(captured[0].content)
     assert "fallbacks" not in body
@@ -94,7 +107,7 @@ def test_real_sdk_tool_use_response_runs_availability(kb):
     thinking = {"type": "thinking", "thinking": "", "signature": "sig"}
     assistant, _ = _assistant(kb, lambda _r: (200, _message([thinking, tool_use], "tool_use")))
 
-    reply = assistant.reply(ChatRequest(message="Rooms for 3 adults 7-9 Oct?"), TODAY)
+    reply = assistant.reply("Rooms for 3 adults 7-9 Oct?")
 
     assert reply.type == "availability"
     assert {r.room_id for r in reply.availability.rooms} == {"deluxe-pool-view", "family-suite"}
@@ -106,24 +119,21 @@ def test_http_errors_from_the_api_become_llm_errors(kb, status):
     assistant, _ = _assistant(kb, lambda _r: (status, error))
 
     with pytest.raises(LLMError):
-        assistant.reply(ChatRequest(message="hi"), TODAY)
+        assistant.reply("hi")
 
 
 def test_refusal_stop_reason_becomes_llm_error(kb):
     assistant, _ = _assistant(kb, lambda _r: (200, _message([], "refusal")))
 
     with pytest.raises(LLMError, match="declined"):
-        assistant.reply(ChatRequest(message="hi"), TODAY)
+        assistant.reply("hi")
 
 
 def test_booking_context_is_sent_to_the_model(kb):
     answer = {"type": "clarification", "text": "Sure.", "source_ids": [], "suggestions": []}
     assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")))
 
-    assistant.reply(
-        ChatRequest(message="Same dates, but for 3 adults.", booking_context=BookingContext(check_in="2026-10-07", check_out="2026-10-09", adults=2)),
-        TODAY,
-    )
+    assistant.reply("Same dates, but for 3 adults.", booking_context=BookingContext(check_in="2026-10-07", check_out="2026-10-09", adults=2))
 
     last = json.loads(captured[0].content)["messages"][-1]["content"]
     assert "check_in=2026-10-07, check_out=2026-10-09, adults=2" in last

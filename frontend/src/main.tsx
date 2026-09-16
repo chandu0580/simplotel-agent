@@ -2,9 +2,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { I18nProvider } from './i18n'
+import { detectLocale } from './i18n/core'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <I18nProvider initialLocale={detectLocale()}>
+      <App />
+    </I18nProvider>
   </StrictMode>,
 )

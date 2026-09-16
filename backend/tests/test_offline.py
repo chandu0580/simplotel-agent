@@ -1,17 +1,18 @@
 import pytest
 
-from app.offline import OfflineAssistant, extract_party_size, is_availability_request
-from app.schemas import BookingContext, ChatRequest
-from tests.conftest import TODAY
+from app.assistant.offline import extract_party_size, is_availability_request
+from app.schemas import BookingContext
+from tests.conftest import turn_request
 
 
 @pytest.fixture
-def offline(kb):
-    return OfflineAssistant(kb)
+def offline(offline_container):
+    return offline_container
 
 
-def ask(offline, message, **kwargs):
-    return offline.reply(ChatRequest(message=message, **kwargs), TODAY)
+def ask(container, message, **kwargs):
+    """Runs the full assistant service with AI disabled, i.e. the offline engine."""
+    return container.assistant.handle(turn_request(container, message, **kwargs)).reply
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,12 @@
+{
+  "_comment": "Mock inventory for the second demo hotel. Weekday business demand: executive rooms sell out on Tuesdays.",
+  "total_rooms": {
+    "executive-king": 40,
+    "studio-suite": 10
+  },
+  "weekday_rules": [
+    { "weekday": "tuesday", "room_id": "executive-king", "booked": 40 }
+  ],
+  "booked": {},
+  "seasonal_multipliers": []
+}

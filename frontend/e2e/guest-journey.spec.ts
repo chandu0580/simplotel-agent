@@ -23,7 +23,7 @@ test('guest asks questions, follows up, and checks availability end to end', asy
   await expect(page.getByRole('heading', { name: 'The Palm Grove Resort' })).toBeVisible()
 
   // 1. Property question goes through the backend and is answered with a source.
-  const chatResponse = page.waitForResponse((r) => r.url().endsWith('/api/chat') && r.request().method() === 'POST')
+  const chatResponse = page.waitForResponse((r) => r.url().endsWith('/messages') && r.request().method() === 'POST')
   await ask(page, 'What time is check-in?')
   expect((await chatResponse).status()).toBe(200)
   const log = page.getByRole('log', { name: 'Conversation' })
@@ -53,13 +53,13 @@ test('guest asks questions, follows up, and checks availability end to end', asy
 
 test('shows an error when the backend call fails and recovers on retry', async ({ page }) => {
   await page.goto('/')
-  await page.route('**/api/chat', (route) => route.abort('connectionrefused'))
+  await page.route('**/api/v1/hotels/*/conversations/*/messages', (route) => route.abort('connectionrefused'))
 
   await ask(page, 'What is the cancellation policy?')
   const alert = page.getByRole('alert')
   await expect(alert).toContainText("couldn't reach the hotel assistant")
 
-  await page.unroute('**/api/chat')
+  await page.unroute('**/api/v1/hotels/*/conversations/*/messages')
   await alert.getByRole('button', { name: 'Try again' }).click()
   await expect(page.getByText(/48 hours before the check-in date/).first()).toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)

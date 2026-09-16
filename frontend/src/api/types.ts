@@ -52,22 +52,28 @@ export interface ChatReply {
   form_error: string | null
 }
 
-export interface ChatResponse {
+export interface ResponseMeta {
+  trace_id: string
+  prompt_version: string | null
+  tool_schema_version: string | null
+  knowledge_version: string | null
+}
+
+export interface ConversationTurnResponse {
   request_id: string
+  conversation_id: string
   mode: 'ai' | 'offline'
   reply: ChatReply
   notice: string | null
+  meta: ResponseMeta
 }
 
-export interface HistoryItem {
-  role: 'user' | 'assistant'
-  content: string
-}
-
-export interface ChatRequest {
-  message: string
-  history: HistoryItem[]
-  booking_context: Partial<BookingDetails> | null
+export interface ConversationCreated {
+  conversation_id: string
+  hotel_id: string
+  channel: string
+  locale: string | null
+  expires_at: string
 }
 
 export interface AvailabilityRequest {
@@ -79,16 +85,21 @@ export interface AvailabilityRequest {
 
 export interface HotelInfo {
   hotel: {
+    id: string
     name: string
     tagline: string
+    city: string
     phone: string
     email: string
     whatsapp: string
     currency: string
     check_in_time: string
     check_out_time: string
+    languages: string[]
+    brand: { assistant_name: string; primary_color: string }
   }
   today: string
   max_guests: number
   suggested_questions: string[]
+  features: { ai_assistant: boolean }
 }

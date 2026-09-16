@@ -2,15 +2,15 @@ from datetime import date, timedelta
 
 import pytest
 
-from app.availability import AvailabilityValidationError, check_availability
+from app.reservations.availability import AvailabilityValidationError, check_availability
 from tests.conftest import TODAY
 
 WEDNESDAY = date(2026, 10, 7)
 SATURDAY = date(2026, 10, 10)
 
 
-def test_weekday_stay_returns_fitting_rooms_sorted_by_price(kb):
-    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=2), adults=2, today=TODAY, kb=kb)
+def test_weekday_stay_returns_fitting_rooms_sorted_by_price(kb, inventory):
+    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=2), adults=2, today=TODAY, kb=kb, inventory=inventory)
 
     assert result.available
     assert result.nights == 2
@@ -21,15 +21,15 @@ def test_weekday_stay_returns_fitting_rooms_sorted_by_price(kb):
     assert garden.rooms_left == 12
 
 
-def test_three_adults_excludes_rooms_that_cannot_fit_them(kb):
-    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=1), adults=3, today=TODAY, kb=kb)
+def test_three_adults_excludes_rooms_that_cannot_fit_them(kb, inventory):
+    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=1), adults=3, today=TODAY, kb=kb, inventory=inventory)
 
     assert {r.room_id for r in result.rooms} == {"deluxe-pool-view", "family-suite"}
 
 
-def test_room_sold_out_on_any_night_is_excluded(kb):
+def test_room_sold_out_on_any_night_is_excluded(kb, inventory):
     # Family suites are fully booked on Saturdays; a Fri–Sun stay includes Saturday night.
-    result = check_availability(SATURDAY - timedelta(days=1), SATURDAY + timedelta(days=1), adults=4, children=1, today=TODAY, kb=kb)
+    result = check_availability(SATURDAY - timedelta(days=1), SATURDAY + timedelta(days=1), adults=4, children=1, today=TODAY, kb=kb, inventory=inventory)
 
     assert not result.available
     assert result.rooms == []
@@ -37,25 +37,25 @@ def test_room_sold_out_on_any_night_is_excluded(kb):
     assert "sold out" in result.message
 
 
-def test_rooms_left_is_minimum_across_nights(kb):
-    result = check_availability(SATURDAY - timedelta(days=1), SATURDAY + timedelta(days=1), adults=2, today=TODAY, kb=kb)
+def test_rooms_left_is_minimum_across_nights(kb, inventory):
+    result = check_availability(SATURDAY - timedelta(days=1), SATURDAY + timedelta(days=1), adults=2, today=TODAY, kb=kb, inventory=inventory)
 
     deluxe = next(r for r in result.rooms if r.room_id == "deluxe-pool-view")
     assert deluxe.rooms_left == 2  # 8 rooms, 6 booked on Saturdays
     assert "Ocean Villa" in result.sold_out_room_names
 
 
-def test_party_too_large_for_any_room_explains_group_option(kb):
-    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=1), adults=7, today=TODAY, kb=kb)
+def test_party_too_large_for_any_room_explains_group_option(kb, inventory):
+    result = check_availability(WEDNESDAY, WEDNESDAY + timedelta(days=1), adults=7, today=TODAY, kb=kb, inventory=inventory)
 
     assert not result.available
     assert "No single room type" in result.message
     assert kb.hotel.phone in result.message
 
 
-def test_peak_season_pricing_applies_multiplier(kb):
+def test_peak_season_pricing_applies_multiplier(kb, inventory):
     check_in = date(2026, 12, 20)
-    result = check_availability(check_in, check_in + timedelta(days=1), adults=2, today=TODAY, kb=kb)
+    result = check_availability(check_in, check_in + timedelta(days=1), adults=2, today=TODAY, kb=kb, inventory=inventory)
 
     garden = next(r for r in result.rooms if r.room_id == "garden-standard")
     assert garden.total_price == 8300  # 5200 * 1.6 rounded to nearest 100
@@ -73,6 +73,6 @@ def test_peak_season_pricing_applies_multiplier(kb):
         (WEDNESDAY, WEDNESDAY + timedelta(days=1), 0, "adult"),
     ],
 )
-def test_invalid_searches_are_rejected(kb, check_in, check_out, adults, error):
+def test_invalid_searches_are_rejected(kb, inventory, check_in, check_out, adults, error):
     with pytest.raises(AvailabilityValidationError, match=error):
-        check_availability(check_in, check_out, adults, today=TODAY, kb=kb)
+        check_availability(check_in, check_out, adults, today=TODAY, kb=kb, inventory=inventory)

@@ -1,0 +1,20 @@
+{
+  "_comment": "Tenant registry. A tenant is a hotel group (the customer); each hotel belongs to exactly one tenant. hotel_id values are globally unique. feature_flags override global defaults for that tenant.",
+  "default_hotel_id": "hotel-goa-001",
+  "tenants": [
+    {
+      "id": "tenant-demo",
+      "name": "Palm Grove Hospitality (demo)",
+      "status": "active",
+      "hotels": ["hotel-goa-001"],
+      "feature_flags": {}
+    },
+    {
+      "id": "tenant-metro",
+      "name": "Metro Business Stays (demo)",
+      "status": "active",
+      "hotels": ["hotel-blr-001"],
+      "feature_flags": {}
+    }
+  ]
+}
