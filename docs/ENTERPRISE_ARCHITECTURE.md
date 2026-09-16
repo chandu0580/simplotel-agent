@@ -44,7 +44,7 @@ All code paths are relative to `backend/app/` unless stated otherwise. `containe
 | Tool registry (validation, authorization, timeout, audit) | **IMPLEMENTED + TESTED** | `tools/base.py` |
 | `check_availability`, `request_booking_details` tools | **IMPLEMENTED + TESTED** | `tools/builtin.py` |
 | `create_booking` tool (not exposed to model, flag-gated) | **IMPLEMENTED + TESTED** (prototype) | `tools/builtin.py` |
-| `ReservationProvider` boundary | **DESIGNED** (no real PMS/CRS adapter) | `reservations/provider.py` |
+| `ReservationProvider` boundary | **IMPLEMENTED + TESTED** (interface, mock and resilience wrapper); real PMS/CRS adapter **NOT IMPLEMENTED** ([RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md)) | `reservations/provider.py` |
 | Mock reservation provider and bookings | **IMPLEMENTED + TESTED** (prototype: mock inventory, in-process bookings) | `reservations/provider.py`, `data/hotels/*/inventory.json` |
 | Resilience wrapper (timeout, retries with deadline, circuit breaker, cache) | **IMPLEMENTED + TESTED** (breaker state is per process) | `reservations/provider.py`, `core/resilience.py` |
 | Idempotency store | **IMPLEMENTED + TESTED** (memory by default, or optional Redis lease lock plus stored result; tested across 3 stores on real Redis, verified locally once, not run in CI) | `reservations/idempotency.py`, `state/redis_backend.py` |
@@ -181,7 +181,7 @@ flowchart TB
     CONV -.-> PGREPO
 ```
 
-Main flow today: `POST /api/v1/hotels/{hotel_id}/conversations/{id}/messages` → middleware (request ids, 64 KB body limit) → `resolve_guest_context` (IP burst and IP limits, then hotel resolution) → `enforce_rate_limits` (tenant, hotel, conversation) → `ConversationService.post_message` (turn lock, version compare-and-set on save) → `AssistantService.handle` (PII masking, input guardrails) → `AIAssistant.reply` (or `OfflineAssistant.reply`) → `ToolRegistry.execute` where a tool is chosen → reply, trace, metrics, events (and audit rows when `DATABASE_URL` is set). These endpoints are synchronous handlers run in the worker thread pool (`WORKER_THREADS`, default 150), so Redis round trips for rate limiting and tenant resolution never block the event loop; only `/health` is async.
+Main flow today: `POST /api/v1/hotels/{hotel_id}/conversations/{id}/messages` → middleware (request ids, IP burst and IP limits for every `/api/` request, 64 KB body limit) → `resolve_guest_context` (hotel resolution) → `enforce_rate_limits` (tenant, hotel, conversation) → `ConversationService.post_message` (turn lock, version compare-and-set on save) → `AssistantService.handle` (PII masking, input guardrails) → `AIAssistant.reply` (or `OfflineAssistant.reply`) → `ToolRegistry.execute` where a tool is chosen → reply, trace, metrics, events (and audit rows when `DATABASE_URL` is set). These endpoints are synchronous handlers run in the worker thread pool (`WORKER_THREADS`, default 150), so Redis round trips for rate limiting and tenant resolution never block the event loop; only `/health` is async.
 
 ---
 
@@ -236,7 +236,7 @@ The backend is a single deployable (one FastAPI process) split into packages wit
 
 ### How isolation is enforced today (IMPLEMENTED + TESTED unless noted)
 
-1. **Registry resolution.** Guest routes are hotel-scoped (`/api/v1/hotels/{hotel_id}/…`). `resolve_guest_context` applies the IP burst and per-IP rate limits first (so probing unknown hotel ids is counted), then maps `hotel_id` to its tenant; unknown hotels and hotels of suspended tenants return `404 HOTEL_NOT_FOUND`. The conversation rate-limit key is scoped per hotel, so ids sent to one hotel can't consume another hotel's budget.
+1. **Registry resolution.** Guest routes are hotel-scoped (`/api/v1/hotels/{hotel_id}/…`). The HTTP middleware has already applied the IP burst and per-IP limits to every `/api/` request (so probing unknown hotel ids, unknown routes and malformed bodies are counted); `resolve_guest_context` maps `hotel_id` to its tenant; unknown hotels and hotels of suspended tenants return `404 HOTEL_NOT_FOUND`. The conversation rate-limit key is scoped per hotel, so ids sent to one hotel can't consume another hotel's budget.
 2. **Repository keys.** `ConversationRepository.get/delete` take `(tenant_id, hotel_id, conversation_id)`, in both the memory and Redis backends. A conversation id from hotel A requested through hotel B is not found, including on another replica (tested with three in-process replicas sharing Redis).
 3. **Provider checks.** `MockReservationProvider.check_availability` rejects a `KnowledgeBase` snapshot whose `hotel.id` differs from `ctx.hotel_id`. Availability cache keys and idempotency scopes include `tenant_id` and `hotel_id`.
 4. **Admin principal scoping.** `Principal` carries `tenant_id` (or `*` for platform admins only) and an optional `hotel_ids` set. `require_admin` checks tenant or hotel access and role before any data access.
@@ -321,7 +321,7 @@ There is no agent loop: every tool result is final, so nothing needs to go back 
 
 The rendered system prompt is memoised per `(hotel_id, knowledge_version, evidence ids)` so it is byte-identical across turns, and the Anthropic adapter marks it `cache_control: ephemeral`. The GLM adapter records cached prompt tokens when the endpoint reports them. Prompt cache hit rates have not been measured.
 
-**GLM runtime evidence (not Claude).** With `glm-5.2` through the GLM-native adapter: development suite 34/34 in two runs (decision accuracy 18/18; groundedness 13/13 and 14/14; per-scenario latency p50 5511 / 5593 ms, p95 12620 / 14280 ms) and holdout suite 12/12 with all 10 critical scenarios passing. Earlier runs over the Anthropic-format path scored 33/34, 34/34 and 32/34. These numbers are evidence for the GLM runtime only. They say nothing about Claude quality or latency. Details: [EVALUATION.md](EVALUATION.md).
+**GLM runtime evidence (not Claude).** With `glm-5.2` through the GLM-native adapter: development suite 34/34 in three runs, two adapter runs and a final run on the final code (decision accuracy 18/18 in each; groundedness 13/13, 14/14 and 14/14; final-run critical 14/14; per-scenario latency p50 5511 / 5593 / 3718 ms, p95 12620 / 14280 / 10062 ms) and holdout suite 12/12 with all 10 critical scenarios passing. Earlier runs over the Anthropic-format path scored 33/34, 34/34 and 32/34. These numbers are evidence for the GLM runtime only. They say nothing about Claude quality or latency. Details: [EVALUATION.md](EVALUATION.md).
 
 ---
 

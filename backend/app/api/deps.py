@@ -6,7 +6,7 @@ from ..auth.principal import Principal, Role
 from ..container import Container
 from ..core.errors import AppError, ErrorCode
 from ..core.observability import bind_context
-from ..core.rate_limit import RateLimitRule
+from ..core.rate_limit import RateLimitDecision, RateLimitRule
 from ..tenancy import Channel, TenantContext
 
 
@@ -36,25 +36,31 @@ def _hit(request: Request, rule: RateLimitRule) -> None:
         )
 
 
-def enforce_ip_limit(request: Request) -> None:
+def ip_limit_exceeded(request: Request) -> tuple[RateLimitRule, RateLimitDecision] | None:
+    """IP burst and per-minute limits, applied by the HTTP middleware to every /api/ request before routing
+    and validation, so unknown routes, unknown hotels and malformed bodies all count. Blocking (may call Redis):
+    run it off the event loop."""
     s = container_of(request).settings
-    if s.rate_limit_enabled:
-        ip = client_ip(request, s.trust_proxy_headers)
-        _hit(request, RateLimitRule("ip_burst", ip, s.rate_limit_ip_burst, s.rate_limit_burst_window_seconds))
-        _hit(request, RateLimitRule("ip", ip, s.rate_limit_ip_per_minute))
+    if not s.rate_limit_enabled:
+        return None
+    ip = client_ip(request, s.trust_proxy_headers)
+    for rule in (RateLimitRule("ip_burst", ip, s.rate_limit_ip_burst, s.rate_limit_burst_window_seconds), RateLimitRule("ip", ip, s.rate_limit_ip_per_minute)):
+        decision = container_of(request).rate_limiter.hit(rule)
+        if not decision.allowed:
+            container_of(request).metrics.rate_limited_total.labels(rule.dimension).inc()
+            return rule, decision
+    return None
 
 
 def resolve_guest_context(request: Request, hotel_id: str, channel: Channel = Channel.WEB) -> TenantContext:
     container = container_of(request)
-    # Count the caller before resolving the hotel, so probing unknown hotel ids is rate limited too.
-    enforce_ip_limit(request)
     ctx = container.tenants.resolve(hotel_id, channel, request.state.request_id, request.state.trace_id)
     bind_context(tenant_id=ctx.tenant_id, hotel_id=ctx.hotel_id, channel=ctx.channel)
     return ctx
 
 
 def enforce_rate_limits(request: Request, ctx: TenantContext | None, conversation_id: str | None = None) -> None:
-    """Tenant, hotel and conversation limits (IP limits are applied in resolve_guest_context).
+    """Tenant, hotel and conversation limits (IP limits are applied earlier, in the HTTP middleware).
 
     The tenant budget stops one hotel group with many hotels from starving shared capacity.
     """
@@ -72,7 +78,6 @@ def enforce_rate_limits(request: Request, ctx: TenantContext | None, conversatio
 
 def require_admin(request: Request, tenant_id: str, role: Role, hotel_id: str | None = None) -> Principal:
     container = container_of(request)
-    enforce_ip_limit(request)
     if not container.auth.configured:
         raise AppError(ErrorCode.UNAUTHORIZED, "Admin authentication is not configured for this deployment.", 401, details=[{"reason": "auth_not_configured"}])
     principal = container.auth.authenticate(request.headers.get("Authorization"))

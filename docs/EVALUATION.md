@@ -4,10 +4,10 @@ Kinds of evidence, kept separate:
 
 | Kind | What it proves | Uses the real Claude API? | Current status (hardening phase, 2026-09-16) |
 |---|---|---|---|
-| **A. Automated tests** (pytest, Vitest, Playwright; integration tests against real Redis and PostgreSQL) | Business rules, tenancy isolation, tool authorization, resilience, guardrails, shared state, RLS, error model, API contract, UI states, integrated browser → frontend → backend flow | **No** (model faked or HTTP-mocked) | Passing; totals in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md) |
+| **A. Automated tests** (pytest, Vitest, Playwright; integration tests against real Redis and PostgreSQL) | Business rules, tenancy isolation, tool authorization, resilience, guardrails, shared state, RLS, error model, API contract, UI states, integrated browser → frontend → backend flow | **No** (model faked or HTTP-mocked) | Unit, contract, API, UI and E2E tests passing. The Redis/PostgreSQL integration tests pass when those optional services are provided (292 passed, run locally once) and are skipped otherwise; they are not run in CI. Totals in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md) |
 | **B. Offline evaluation** (`evals/run_evals.py --mode offline`) | Deterministic engine plus full turn pipeline on realistic scenarios; regression and critical-scenario gates | **No** | Development suite 28/28 (6 AI-only skipped), critical 14/14; holdout suite 12/12, critical 10/10 |
 | **C. Anthropic Claude live evaluation** | How Claude actually behaves | **Yes** | **NOT VERIFIED — no Anthropic credential** |
-| **D. GLM runtime evaluation** (`--mode ai` with `LLM_PROVIDER=glm`, model `glm-5.2`) | The default runtime provider end to end through the real application code path | **No** (GLM, not Claude) | GLM-native adapter: development suite 34/34 and 34/34; holdout suite 12/12, critical 10/10 |
+| **D. GLM runtime evaluation** (`--mode ai` with `LLM_PROVIDER=glm`, model `glm-5.2`) | The default runtime provider end to end through the real application code path | **No** (GLM, not Claude) | GLM-native adapter: development suite 34/34 in three runs (two adapter runs and a final run on the final code, critical 14/14); holdout suite 12/12, critical 10/10 |
 
 > **Nothing in this repository has been verified against the live Anthropic Claude API.** Section D is evidence for the GLM runtime only. It is not Claude verification.
 
@@ -103,12 +103,13 @@ In CI, dispatch `.github/workflows/live-ai-eval.yml` with provider `anthropic` (
 
 #### D.1 GLM-native adapter (current)
 
-Setup: `LLM_PROVIDER=glm`, model `glm-5.2`, default settings from `backend/.env`. The adapter (`app/llm/glm_provider.py`) uses the OpenAI-compatible Chat Completions protocol with `tool_choice="required"` (forced tool call) and `parallel_tool_calls=false`. Results: [`glm-5.2-adapter-run1.md`](../backend/evals/results/glm-5.2-adapter-run1.md), [`glm-5.2-adapter-run2.md`](../backend/evals/results/glm-5.2-adapter-run2.md).
+Setup: `LLM_PROVIDER=glm`, model `glm-5.2`, default settings from `backend/.env`. The adapter (`app/llm/glm_provider.py`) uses the OpenAI-compatible Chat Completions protocol with `tool_choice="required"` (forced tool call) and `parallel_tool_calls=false`. Results: [`glm-5.2-adapter-run1.md`](../backend/evals/results/glm-5.2-adapter-run1.md), [`glm-5.2-adapter-run2.md`](../backend/evals/results/glm-5.2-adapter-run2.md), [`glm-5.2-final.md`](../backend/evals/results/glm-5.2-final.md). The final run was made on the final hardening-phase code (PII masking, shared-state layer, sync endpoints).
 
 | Run (development suite, 34 scenarios) | Result | Served by AI | Decision accuracy | Groundedness | Latency p50 / p95 (per scenario) |
 |---|---|---|---|---|---|
 | Adapter run 1 | **34/34** | 33/34 | 18/18 | 13/13 | 5511 / 12620 ms |
 | Adapter run 2 | **34/34** | 33/34 | 18/18 | 14/14 | 5593 / 14280 ms |
+| Final run (final code; critical 14/14) | **34/34** | 33/34 | 18/18 | 14/14 | 3718 / 10062 ms |
 
 The one scenario not served by AI in each run is `model-failure-fallback`, which simulates a model outage on purpose and must be answered offline. "Decision accuracy" covers only scenarios with a structured `decision_any` expectation (18 of 34). Per-scenario latency includes every turn of multi-turn scenarios.
 
@@ -121,7 +122,7 @@ The last runs over the Anthropic-format path (D.3) had two failing scenarios. Ea
 | `follow-up-breakfast` | GLM answered in plain text instead of calling a tool; the app degraded to the offline engine and the eval correctly counted a failure | Over the Anthropic-format protocol the tool choice could not be forced, so GLM sometimes skipped the tool | Fixed at the adapter layer: a GLM-native adapter over the OpenAI-compatible protocol that forces a tool call (`tool_choice="required"`) | Prompt, scenario and assertions unchanged. Plain text instead of a tool call still maps to fallback reason `invalid_output` → `LLM_UNAVAILABLE` and a grounded offline answer (provider-neutral contract test) |
 | `injection-pretend-policy` | Reported as failed | **Evaluator false negative.** GLM's refusal was correct but phrased "does not allow", which was missing from the scenario's include list | Include list extended with that phrasing | No assertion on behaviour was loosened; the exclude list and structured checks are unchanged |
 
-Both scenarios pass in both adapter runs (D.1).
+Both scenarios pass in both adapter runs and in the final run (D.1).
 
 #### D.3 Earlier runs over the Anthropic-format path (previous phase)
 
@@ -273,7 +274,7 @@ frontend $ npx oxlint src e2e                   0 findings
 | Backend failure | `/api/chat` connection refused → error alert → restore → "Try again" → cancellation policy shown, alert gone | ✅ desktop, ✅ Pixel 7 |
 | Missing details | "Do you have rooms available?" → booking form shown | ✅ desktop, ✅ Pixel 7 |
 
-E2E runs with `AI_ENABLED=false`, so it's deterministic and free. `E2E_USE_AI=true npm run test:e2e` runs the same flows against the live model (not yet run).
+E2E runs with `AI_ENABLED=false`, so it's deterministic and free. `E2E_USE_AI=true npm run test:e2e` (PowerShell: `$env:E2E_USE_AI="true"; npm run test:e2e`) runs the same flows against the live model (not yet run).
 
 A manual check at a 360px viewport with a long unbroken URL and an error state showed no horizontal overflow (`scrollWidth` = 360).
 
@@ -281,7 +282,7 @@ A manual check at a 360px viewport with a long unbroken URL and an error state s
 
 ### B. Offline evaluation (deterministic fallback engine)
 
-`python -m evals.run_evals --mode offline` → **21/21 passed, 6 skipped (AI-only)**, 27 scenarios in total. Full table: [`backend/evals/results/offline.md`](../backend/evals/results/offline.md).
+`python -m evals.run_evals --mode offline` → **21/21 passed, 6 skipped (AI-only)**, 27 scenarios in total (historical result at that commit). The current [`backend/evals/results/offline.md`](../backend/evals/results/offline.md) has since been overwritten by later runs (28/28, 34 scenarios; see current section B).
 
 Dates in scenarios are generated relative to the run date: `{wed}` = the first Wednesday at least 14 days ahead (2026-09-30 in this run).
 
@@ -371,7 +372,7 @@ Separately, the eval runner was fixed so that **in AI mode a scenario answered b
 |---|---|---|---|---|
 | 1 | Offline engine treated "booking" and "available" as availability intent | "What is the cancellation policy for my booking?", "Is breakfast available?" and "Is parking available?" showed a booking form instead of the answer | Generic words count as intent only alongside room/stay words, a date range, or when no FAQ topic matches; added "my booking" / "my reservation" keywords to the cancellation entry | `test_faq_questions_mentioning_booking_or_available_are_not_treated_as_availability` (4 cases), eval `faq-booking-word-not-availability` |
 | 2 | Offline engine ignored booking context for guest-count follow-ups | "3 adults." after a dates-only request gave a fallback | Party size + known dates in context → search | `test_guest_count_follow_up_uses_dates_from_booking_context`, eval `follow-up-dates-then-guests` |
-| 3 | Offline engine didn't treat "Rooms for three adults from X to Y" as availability | Room-capacity answer instead of a search | Two ISO dates in a message → availability intent | `test_malformed_tool_arguments_degrade_to_offline` |
+| 3 | Offline engine didn't treat "Rooms for three adults from X to Y" as availability | Room-capacity answer instead of a search | Two ISO dates in a message → availability intent | Indirectly by `test_malformed_tool_arguments_degrade_to_offline` (its offline fallback for "Rooms for three adults from 2026-10-07 to 2026-10-09?" must be an availability reply); no dedicated unit test |
 | 4 | Malformed tool arguments from the model (e.g. `adults: "three"`) raised an unhandled `ValidationError` | HTTP 500 instead of fallback | Tool arguments validated with Pydantic; failure → `LLMError` → offline | `test_malformed_tool_arguments_degrade_to_offline`, `test_unknown_tool_degrades_to_offline` |
 | 5 | SDK errors other than status/connection errors (e.g. `APIResponseValidationError`) weren't caught | HTTP 500 instead of fallback | Catch `anthropic.AnthropicError` → `LLMError` | `test_unexpected_sdk_error_degrades_to_offline` |
 | 6 | A new check-in from the model was merged with the check-out from an older search | Pre-filled form could have check-out before check-in | Remembered dates reused only when the model gave no dates | `test_new_check_in_from_model_is_not_mixed_with_old_check_out` |

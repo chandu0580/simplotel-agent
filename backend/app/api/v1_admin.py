@@ -16,7 +16,7 @@ from .deps import container_of, require_admin
 router = APIRouter(
     prefix="/api/v1/admin/tenants/{tenant_id}",
     tags=["admin v1"],
-    responses={401: {"model": V1ErrorResponse}, 403: {"model": V1ErrorResponse}, 404: {"model": V1ErrorResponse}},
+    responses={code: {"model": V1ErrorResponse} for code in (401, 403, 404, 429, 500)},
 )
 
 

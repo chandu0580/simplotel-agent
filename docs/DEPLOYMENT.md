@@ -6,18 +6,19 @@ Status labels follow [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).
 
 ## Local development (canonical)
 
-Backend (Python 3.13):
+Backend (Python 3.13), Windows PowerShell:
 
-```bash
+```powershell
 cd backend
 python -m venv .venv
-.venv\Scripts\activate            # Windows
-source .venv/bin/activate         # macOS / Linux
+.venv\Scripts\Activate.ps1        # cmd.exe: .venv\Scripts\activate.bat
 pip install -r requirements.txt   # requirements-dev.txt for tests, lint and the load test
 uvicorn app.main:app --reload --port 8000
 ```
 
-Frontend (Node 22):
+macOS / Linux: the same commands, activating with `source .venv/bin/activate`.
+
+Frontend (Node.js 22.12+):
 
 ```bash
 cd frontend
@@ -42,13 +43,15 @@ npm run build                     # static files in frontend/dist
 - set **Content-Security-Policy** (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`), **Permissions-Policy** (camera, microphone, geolocation, payment, usb denied), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` on HTML and assets
 - send **Strict-Transport-Security** where TLS terminates
 
-These static-hosting headers are a **hosting requirement, NOT IMPLEMENTED in this repository**. The backend sets its own headers on every API response (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store` for `/api`, and HSTS when `APP_ENV=production`), and a test covers them (`test_security_headers_request_ids_and_trace_propagation`).
+These static-hosting headers are a **hosting requirement, NOT IMPLEMENTED in this repository**. The backend sets its own headers on every API response (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store` for `/api`, and HSTS when `APP_ENV=production`), and `test_security_headers_request_ids_and_trace_propagation` asserts `X-Content-Type-Options`, `X-Frame-Options` and `Cache-Control`; `Referrer-Policy` and HSTS are set in code (`app/api/middleware.py`) but not asserted by a test.
 
 ## Running the backend outside development
 
-```bash
-APP_ENV=production uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 25
+```powershell
+$env:APP_ENV="production"; uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 25
 ```
+
+Bash: `APP_ENV=production uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 25`.
 
 `APP_ENV=production` turns on startup validation. The process refuses to start if:
 - a model endpoint isn't `https://`

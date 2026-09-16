@@ -81,8 +81,8 @@ class AssistantService:
 
     def handle(self, request: TurnRequest) -> TurnOutcome:
         started = time.perf_counter()
-        # Personal data never reaches the model, traces or storage (see app.core.privacy). Idempotent, so
-        # text already minimised by ConversationService passes through unchanged.
+        # Personal data never reaches the model, traces or storage (see app.core.privacy). This is the only
+        # place masking happens; ConversationService stores the masked request.message afterwards.
         masked = self.minimise(request.message)
         request.message = masked.text
         request.history = [item.model_copy(update={"content": self.minimise(item.content).text}) for item in request.history]

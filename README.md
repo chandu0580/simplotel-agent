@@ -14,7 +14,7 @@ The project began as a take-home assignment for Simplotel and has since been evo
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
 | **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
-| **GLM (default provider)** | Development suite 34/34 in two runs and holdout suite 12/12 with the GLM-native adapter. This is evidence for the GLM runtime only, **not** Claude verification. |
+| **GLM (default provider)** | Development suite 34/34 in three runs (two adapter runs and a final run on the final code) and holdout suite 12/12 with the GLM-native adapter. This is evidence for the GLM runtime only, **not** Claude verification. |
 | **CI** | Workflows are defined; **neither has been run on GitHub**. |
 
 Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
@@ -58,23 +58,38 @@ Overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Deep dive: [ENTERPRISE
 
 ## Quick start
 
-Requirements: Python 3.11+ (developed on 3.13) and Node.js 20+ (developed on 22). No Docker is needed.
+Requirements: Python 3.11+ (developed on 3.13) and Node.js 22.12+ (developed on 22; the installed Vitest requires `^22.12.0 || ^24.0.0 || >=26.0.0`). No Docker is needed.
 
 On Windows, clone into a short path (e.g. `C:\dev\simplotel-agent`) or [enable long paths](https://pip.pypa.io/warnings/enable-long-paths). Some Anthropic SDK file names are long enough that `pip install` fails in deeply nested folders.
 
 **Backend**
 
+Windows PowerShell:
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+# If activation is blocked by the execution policy, run this first (current window only):
+#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+# In cmd.exe activate with: .venv\Scripts\activate.bat
+pip install -r requirements.txt    # for tests and linting: pip install -r requirements-dev.txt
+Copy-Item .env.example .env        # optional: add LLM_API_KEY and LLM_BASE_URL
+uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/docs
+```
+
+macOS/Linux:
+
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate            # Windows
-source .venv/bin/activate          # macOS/Linux
+source .venv/bin/activate
 pip install -r requirements.txt    # for tests and linting: pip install -r requirements-dev.txt
 cp .env.example .env               # optional: add LLM_API_KEY and LLM_BASE_URL
 uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/docs
 ```
 
-**Frontend** (second terminal)
+**Frontend** (second terminal; the same commands work in PowerShell and bash)
 
 ```bash
 cd frontend
@@ -84,7 +99,13 @@ npm run dev                        # http://localhost:5173 (Vite proxies /api to
 
 Without `LLM_API_KEY` and `LLM_BASE_URL` the assistant runs in offline FAQ mode. To enable AI, put the provider settings (see [Environment](#environment)) in `backend/.env`.
 
-To point the UI at the second demo hotel, run `VITE_HOTEL_ID=hotel-blr-001 npm run dev`.
+To point the UI at the second demo hotel, in PowerShell:
+
+```powershell
+$env:VITE_HOTEL_ID="hotel-blr-001"; npm run dev
+```
+
+On macOS/Linux: `VITE_HOTEL_ID=hotel-blr-001 npm run dev`. In PowerShell the variable stays set for that window; clear it with `Remove-Item Env:VITE_HOTEL_ID`.
 
 The default configuration keeps all state in memory in one process. The optional adapters are enabled with `STATE_BACKEND=redis` + `REDIS_URL` and `DATABASE_URL` (PostgreSQL, run migrations first); they require Redis and PostgreSQL services you provide. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -147,7 +168,7 @@ curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/
     "availability": null, "booking_prefill": null, "form_error": null
   },
   "notice": "AI answers are turned off; answers are coming from our standard hotel FAQ.",
-  "meta": {"trace_id": "8fe4f8701638408e897df99d44ac5f3f", "prompt_version": null, "tool_schema_version": null, "knowledge_version": "000669a8d553"}
+  "meta": {"trace_id": "8fe4f8701638408e897df99d44ac5f3f", "degradation": null, "prompt_version": null, "tool_schema_version": null, "knowledge_version": "000669a8d553"}
 }
 ```
 
@@ -209,15 +230,17 @@ The list is defined in `backend/app/core/errors.py`. Legacy endpoints keep their
 
 ## Testing
 
-```bash
+Run with the backend virtual environment activated. The block is written for Windows PowerShell; apart from the `$env:` lines the commands are the same in bash (macOS/Linux variant below).
+
+```powershell
 cd backend
 python -m pytest                                  # unit, contract, security and API tests
 ruff check app tests evals scripts perf
 
 # Optional-adapter integration tests against Redis and PostgreSQL you run yourself
 # (skipped when the variables are unset; not run in CI)
-TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
-TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres \
+$env:TEST_REDIS_URL="redis://127.0.0.1:6379/15"
+$env:TEST_DATABASE_URL="postgresql://<superuser>:<password>@127.0.0.1:5432/postgres"
 python -m pytest tests/integration -rs
 
 # Evaluation (offline needs no model)
@@ -235,7 +258,16 @@ python -m scripts.scan_secrets --git              # tracked files; also: PATH...
 cd ../frontend
 npm test                                          # component tests
 npm run build                                     # type check + build
-npx playwright install chromium && npm run test:e2e   # E2E (real backend + frontend, desktop + mobile, AI disabled)
+npx playwright install chromium                   # once
+npm run test:e2e                                  # E2E (real backend + frontend, desktop + mobile, AI disabled)
+```
+
+macOS/Linux variant of the integration-test command:
+
+```bash
+TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
+TEST_DATABASE_URL=postgresql://<superuser>:<password>@127.0.0.1:5432/postgres \
+python -m pytest tests/integration -rs
 ```
 
 Totals from the latest run: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md). Load-test method and results: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
@@ -255,7 +287,7 @@ Two suites. The **development** suite (34 scenarios: functional, grounding, tool
 |---|---|
 | Offline, development suite | 28/28 (6 AI-only skipped); critical 14/14; no regressions vs baseline |
 | Offline, holdout suite | 12/12; critical 10/10 |
-| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | 34/34 and 34/34; decision accuracy 18/18 in both |
+| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | 34/34 in three runs (two adapter runs, then a final run on the final code: critical 14/14, p50 3718 ms, p95 10062 ms); decision accuracy 18/18 in all three |
 | GLM `glm-5.2`, GLM-native adapter, holdout suite (**GLM runtime only, not Claude**) | 12/12; critical 10/10; served by AI 12/12 |
 | Anthropic live | **NOT VERIFIED — no Anthropic credential** |
 
@@ -297,7 +329,7 @@ Structured JSON logs carry request, trace, tenant, hotel, conversation and chann
 
 - **Unverified:** the live Anthropic API has not been called, and the CI workflows have never run on GitHub. GLM results do not verify Claude.
 - **Mocked:** availability and bookings use a mock provider. There is no PMS integration or payment flow ([RESERVATION_INTEGRATION](docs/RESERVATION_INTEGRATION.md)).
-- **Partly persistent:** with the optional `STATE_BACKEND=redis` adapter, conversations, rate limits, idempotency and locks are shared across processes. PostgreSQL stores only the audit trail; the other tables exist as schema only. Knowledge and availability caches stay per process by design.
+- **Partly persistent:** with the optional `STATE_BACKEND=redis` adapter, conversations, rate limits, idempotency and locks are shared across processes. PostgreSQL stores the audit trail plus the tenant and hotel rows synced from the tenant registry at startup; the other tables exist as schema only. Knowledge and availability caches stay per process by design.
 - **Authentication:** admin authentication is not production-grade (development static tokens only); guest chat is unauthenticated by design.
 - **Offline mode is literal:** it matches keywords, answers in English only, and recognises ISO dates only.
 - **Hindi UI strings are a draft** that needs native review.

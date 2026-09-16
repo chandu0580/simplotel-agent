@@ -168,3 +168,20 @@ def test_blocking_state_calls_never_run_on_the_event_loop():
         for w in workers:
             w.join()
     assert health_ms < 300, health_ms  # liveness stays responsive while guest requests wait on state I/O
+
+
+def test_invalid_requests_and_unknown_routes_count_toward_the_ip_limit():
+    """Malformed bodies, unknown routes and wrong methods fail before any endpoint runs; they must still be rate limited."""
+    container = make_container(rate_limit_enabled=True, rate_limit_ip_per_minute=4, rate_limit_ip_burst=100)
+    with TestClient(create_app(container=container)) as client:
+        statuses = [
+            client.post(f"{BASE}/availability", json={"adults": "many"}).status_code,  # 422
+            client.get("/api/v1/does-not-exist").status_code,  # 404
+            client.delete(f"{BASE}/availability").status_code,  # 405
+            client.post(f"{BASE}/availability", json={"adults": "many"}).status_code,  # 422
+        ]
+        blocked = client.post(f"{BASE}/availability", json={"adults": "many"})
+        health = [client.get("/health").status_code for _ in range(10)]
+    assert statuses == [422, 404, 405, 422]
+    assert blocked.status_code == 429 and blocked.json()["error"]["details"] == [{"dimension": "ip"}] and int(blocked.headers["Retry-After"]) >= 1
+    assert health == [200] * 10  # liveness and readiness probes are never rate limited

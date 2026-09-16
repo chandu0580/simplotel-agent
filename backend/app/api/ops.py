@@ -16,7 +16,7 @@ async def health():  # async: served on the event loop, so a saturated worker th
     return {"status": "ok"}
 
 
-@router.get("/ready")
+@router.get("/ready", responses={200: {"description": "ready"}, 503: {"description": "not_ready: same body with status \"not_ready\" and the failing checks"}})
 def ready(request: Request):
     """Readiness: can this instance usefully serve guests?
 

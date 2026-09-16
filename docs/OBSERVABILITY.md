@@ -297,6 +297,7 @@ Reference points (local runs; CI has not run on GitHub):
 | Offline engine, holdout suite | 12/12, critical 10/10 | n/a |
 | GLM adapter `glm-5.2`, development suite, run 1 | 34/34; served_by_ai 33/34 (the 34th, `model-failure-fallback`, simulates an outage on purpose); groundedness 13/13; decision accuracy 18/18 | 5511 / 12620 ms |
 | GLM adapter, development suite, run 2 | 34/34; groundedness 14/14; decision accuracy 18/18 | 5593 / 14280 ms |
+| GLM adapter, development suite, final run (final code) | 34/34; critical 14/14; served_by_ai 33/34; groundedness 14/14; decision accuracy 18/18 | 3718 / 10062 ms |
 | GLM adapter, holdout suite | 12/12, critical 10/10, served_by_ai 12/12 | 5820 / 9948 ms |
 
 GLM results are evidence for the GLM runtime only, **not Claude**. The Anthropic live API is **NOT VERIFIED (no Anthropic credential)**. Details in [EVALUATION.md](EVALUATION.md).

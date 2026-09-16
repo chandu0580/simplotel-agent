@@ -89,10 +89,10 @@ sequenceDiagram
     MW->>MW: request_id = X-Request-ID if it matches the pattern, else 16 hex chars
     MW->>MW: trace_id = traceparent trace-id if valid, else uuid4 hex
     MW->>MW: reset_context, bind_context(request_id, trace_id)
+    MW->>MW: /api/* only: ip_burst and ip limits (off the event loop), 429 RATE_LIMITED + Retry-After
     MW->>MW: Content-Length above 64 KB gives 413 PAYLOAD_TOO_LARGE
     MW->>EP: call_next (body validated first, 422 VALIDATION_ERROR on failure)
     EP->>D: resolve_guest_context(hotel_id)
-    D->>D: ip_burst and ip limits first, 429 RATE_LIMITED + Retry-After
     D-->>EP: TenantContext or 404 HOTEL_NOT_FOUND
     EP->>D: enforce_rate_limits(tenant, hotel, hotel_id:conversation_id)
     D-->>EP: ok or 429 RATE_LIMITED + Retry-After
@@ -130,13 +130,13 @@ sequenceDiagram
 
 ### 2.2 Tenant resolution and rate limits (`api/deps.py`, `tenancy.py`, `core/rate_limit.py`, `state/redis_backend.py`)
 
-1. `resolve_guest_context` first applies the **IP limits** (`enforce_ip_limit`: `ip_burst`, then `ip`) and then calls `TenantRegistry.resolve(hotel_id)`. Because the IP limits come first, requests probing unknown hotel ids are counted too. An unknown hotel, or a hotel whose tenant is not `active`, returns **404 `HOTEL_NOT_FOUND`**. On success it binds `tenant_id`, `hotel_id` and `channel=web` to the log context.
+1. The HTTP middleware applies the **IP limits** (`deps.ip_limit_exceeded`: `ip_burst`, then `ip`) to every `/api/` request before routing and body validation, running the limiter off the event loop. Unknown hotel ids, unknown routes, wrong methods and malformed bodies are therefore all counted (`test_unknown_hotel_probing_is_rate_limited`, `test_invalid_requests_and_unknown_routes_count_toward_the_ip_limit`). `/health`, `/ready` and `/metrics` are not rate limited. `resolve_guest_context` then calls `TenantRegistry.resolve(hotel_id)`. An unknown hotel, or a hotel whose tenant is not `active`, returns **404 `HOTEL_NOT_FOUND`**. On success it binds `tenant_id`, `hotel_id` and `channel=web` to the log context.
 2. `enforce_rate_limits` then applies the tenant and hotel limits and, when there is a conversation id, the conversation limit. All limits are skipped when `RATE_LIMIT_ENABLED=false`, which configuration validation rejects in production. Each limit is a sliding window:
 
 | Dimension | Key | Default limit | Applied by | Applies to |
 |---|---|---|---|---|
-| `ip_burst` | client IP: `X-Forwarded-For` first hop if `TRUST_PROXY_HEADERS`, else socket IP | 30 per 10 s (`RATE_LIMIT_IP_BURST`, `RATE_LIMIT_BURST_WINDOW_SECONDS`) | `enforce_ip_limit`, called from `resolve_guest_context` and `require_admin` | every v1 guest endpoint, legacy `/api/chat` and `/api/availability`, every admin endpoint |
-| `ip` | client IP | 60/min | `enforce_ip_limit` | same as `ip_burst` |
+| `ip_burst` | client IP: `X-Forwarded-For` first hop if `TRUST_PROXY_HEADERS`, else socket IP | 30 per 10 s (`RATE_LIMIT_IP_BURST`, `RATE_LIMIT_BURST_WINDOW_SECONDS`) | `ip_limit_exceeded`, called by the HTTP middleware | every `/api/` request (guest, admin, legacy, unknown routes, invalid bodies) |
+| `ip` | client IP | 60/min | `ip_limit_exceeded` (middleware) | same as `ip_burst` |
 | `tenant` | `tenant_id` | 3000/min | `enforce_rate_limits` | every v1 guest endpoint, legacy `/api/chat` and `/api/availability` |
 | `hotel` | `hotel_id` | 1200/min | `enforce_rate_limits` | same as `tenant` |
 | `conversation` | `{hotel_id}:{conversation_id}` | 20/min | `enforce_rate_limits` | endpoints that take a conversation id (messages, conversation availability, get, delete) |
@@ -557,7 +557,7 @@ Legacy codes use `LEGACY_CODES` for `validation_error`, `invalid_booking_details
 | `CONVERSATION_NOT_FOUND` | 404 | missing, expired, deleted or other-hotel conversation |
 | `UNAUTHORIZED` | 401 | admin with `AUTH_MODE=disabled` (`details=[{"reason": "auth_not_configured"}]`), or missing or invalid token (+ `WWW-Authenticate: Bearer`) |
 | `FORBIDDEN` | 403 | admin scope or role check |
-| `RATE_LIMITED` | 429 | `enforce_ip_limit` (guest and admin) or `enforce_rate_limits` (tenant, hotel, conversation) (+ `Retry-After`, `details=[{"dimension"}]`) |
+| `RATE_LIMITED` | 429 | HTTP middleware IP limits (every `/api/` request) or `enforce_rate_limits` (tenant, hotel, conversation) (+ `Retry-After`, `details=[{"dimension"}]`) |
 | `CONVERSATION_BUSY` | 409 | conversation lock not acquired in time, or compare-and-set conflict on save (+ `Retry-After: 2`) |
 | `RESERVATION_UNAVAILABLE` | 503 | `ReservationError` with code `UNAVAILABLE` on availability endpoints (+ `Retry-After: 30`); also a degradation code |
 | `KNOWLEDGE_UNAVAILABLE` | 503 | hotel knowledge file unreadable or invalid (+ `Retry-After: 30`) |

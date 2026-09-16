@@ -9,7 +9,7 @@ Operational reference for the hotel guest assistant (FastAPI backend in `backend
 > | HTTP conversation message (offline mode) | 8.6 ms | 11.0 ms | Earlier in-process profile (`perf/results.md`), Windows 11, Python 3.13, no network, no LLM |
 > | Assistant turn, zero-latency scripted model | 2.1 ms | n/a | same (application overhead only) |
 > | Local HTTP load test (offline turns, availability, mock AI turns at 10–100 users) | see [PERFORMANCE.md](PERFORMANCE.md) | | `python -m perf.load_test`, one uvicorn worker, same machine as the client. **Local benchmark, not production capacity** |
-> | Eval scenario latency, GLM adapter, development suite (34 scenarios), two runs | 5511 / 5593 ms | 12620 / 14280 ms | `evals/results/glm-5.2-adapter-run{1,2}`; 34/34 both runs. **GLM runtime evidence, not Claude** |
+> | Eval scenario latency, GLM adapter, development suite (34 scenarios), three runs (adapter run 1 / adapter run 2 / final run on the final code) | 5511 / 5593 / 3718 ms | 12620 / 14280 / 10062 ms | `evals/results/glm-5.2-adapter-run{1,2}`, `evals/results/glm-5.2-final`; 34/34 in all three runs (final run critical 14/14). **GLM runtime evidence, not Claude** |
 > | Eval scenario latency, GLM adapter, holdout suite (12 adversarial scenarios) | 5820 ms | 9948 ms | `evals/results/glm-5.2-holdout-run1`; 12/12 |
 
 ---
@@ -228,6 +228,16 @@ Shared-state behaviour is checked by integration tests that build **three indepe
 
 **Run** (from `backend/`, with the virtualenv active and a Redis you provide; the tests use a random key prefix and delete their keys afterwards):
 
+Windows PowerShell:
+
+```powershell
+$env:TEST_REDIS_URL="redis://127.0.0.1:6379/15"; python -m pytest tests/integration/test_redis_state.py
+# optional, PostgreSQL (the test creates a throwaway database and a NOSUPERUSER NOBYPASSRLS app role):
+$env:TEST_DATABASE_URL="postgresql://<superuser>:<password>@127.0.0.1:5432/postgres"; python -m pytest tests/integration/test_postgres.py
+```
+
+macOS/Linux:
+
 ```bash
 TEST_REDIS_URL=redis://127.0.0.1:6379/15 python -m pytest tests/integration/test_redis_state.py
 # optional, PostgreSQL (the test creates a throwaway database and a NOSUPERUSER NOBYPASSRLS app role):
@@ -347,7 +357,7 @@ CI (`.github/workflows/ci.yml`, on push to main/master and PRs). **Neither workf
 
 Not gated in CI: the Redis/PostgreSQL integration tests (§6, Multi-replica verification), shutdown behaviour, and any HTTP-edge checks (CSP, `Permissions-Policy`, HSTS belong to the hosting edge, which isn't in this repository). Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally.
 
-Manual live eval (`.github/workflows/live-ai-eval.yml`, `workflow_dispatch`): inputs `provider` (`glm` \| `anthropic`), `model` (blank = provider default) and `gate` (baseline regression gate); secrets from the protected `ai-evaluation` environment; inputs are sanitised in the shell; results uploaded as `live-ai-eval-results`. Standard CI needs no LLM secret. The Anthropic path is **NOT VERIFIED (no Anthropic credential)**. Locally, the GLM adapter passed the development suite 34/34 in two runs and the holdout suite 12/12 (critical 10/10); these are GLM runtime results only. Details in [EVALUATION.md](EVALUATION.md).
+Manual live eval (`.github/workflows/live-ai-eval.yml`, `workflow_dispatch`): inputs `provider` (`glm` \| `anthropic`), `model` (blank = provider default) and `gate` (baseline regression gate); secrets from the protected `ai-evaluation` environment; inputs are sanitised in the shell; results uploaded as `live-ai-eval-results`. Standard CI needs no LLM secret. The Anthropic path is **NOT VERIFIED (no Anthropic credential)**. Locally, the GLM adapter passed the development suite 34/34 in three runs (two adapter runs and a final run on the final code) and the holdout suite 12/12 (critical 10/10); these are GLM runtime results only. Details in [EVALUATION.md](EVALUATION.md).
 
 **Proposed canary and rollback for prompt/model changes:**
 1. Bump `PROMPT_REVISION` (the hash also changes if the template changes) and run the live eval workflow; compare `summary` with the previous result file.
@@ -368,7 +378,7 @@ All RPO/RTO values: **Proposed target (not measured in production)**.
 | Idempotency records, rate-limit windows, locks | Process memory or Redis | None; losing idempotency records means a replayed booking request is no longer recognised as a duplicate (booking is off by default) | n/a | n/a |
 | Audit events (`domain_event`) | stdout, and PostgreSQL `audit_events` when `DATABASE_URL` is set (best effort, retention job `AUDIT_RETENTION_DAYS=365`) | Database backups with PITR (proposed); no backup is configured today | 5 min | 24 h for query access |
 | Other audit logs (`tool_audit`, `ai_trace`) | stdout only; retention depends on the log shipper (none configured) | Ship to durable log storage with immutable retention | 5 min | 24 h for query access |
-| Secrets | Runtime env / secret manager | Secret manager versioning | 0 | 30 min (rotate + redeploy) |
+| Secrets | Process environment variables (`backend/.env` locally, never committed); no secret manager exists | Secret manager versioning (proposed) | 0 | 30 min (rotate + redeploy) |
 
 Scenarios:
 - **LLM provider outage:** no DR action; offline mode serves FAQ answers (§4). Optional: a second provider or endpoint (`LLM_PROVIDER` / `LLM_BASE_URL` / `ANTHROPIC_BASE_URL`, `https://` required in production), validated by evals first.

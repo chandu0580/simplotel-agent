@@ -4,12 +4,26 @@
 
 ## How it was measured
 
-```bash
+Windows PowerShell:
+
+```powershell
 cd backend
 python -m perf.load_test                                   # 3 scenarios × 10/25/50/100 users, 20 s each → perf/load_results.md
-LOAD_TEST_WORKER_THREADS=150 python -m perf.load_test --levels 50,100 --scenarios mock_ai_turn
+$env:LOAD_TEST_WORKER_THREADS="150"; python -m perf.load_test --levels 50,100 --scenarios mock_ai_turn
+Remove-Item Env:LOAD_TEST_WORKER_THREADS
 python -m perf.benchmark                                   # in-process profile of each layer → perf/results.md
 ```
+
+macOS/Linux:
+
+```bash
+cd backend
+python -m perf.load_test
+LOAD_TEST_WORKER_THREADS=150 python -m perf.load_test --levels 50,100 --scenarios mock_ai_turn
+python -m perf.benchmark
+```
+
+Every run of `perf.load_test` writes `perf/load_results.md` and `perf/load_results.json`, replacing what is there. The server's thread pool comes from `LOAD_TEST_WORKER_THREADS`, which defaults to **40** (not the application default `WORKER_THREADS=150`), so a plain `python -m perf.load_test` reproduces the committed 40-thread table. The 150-thread run above overwrites that table; its committed output, `perf/load_results_mock_ai_threads150.md` / `.json`, was produced by renaming the files after the run. To keep the 40-thread results, copy or rename `load_results.*` before running with 150 threads.
 
 `perf/load_test.py` starts the real API as a subprocess with the standard command (`uvicorn app.main:app`, one worker). It then drives the API over real HTTP with closed-loop virtual users: each user sends its next request as soon as the previous one returns.
 
@@ -91,7 +105,7 @@ At runtime every AI trace separates the latency sources (`AITrace`, see [OBSERVA
 
 These fields also feed the histograms `turn_latency_ms{mode}`, `app_latency_ms{mode}` and `retrieval_latency_ms`. A test checks that total ≈ llm + tools + app to within 1 ms.
 
-For comparison, measured live-model latency (GLM 5.2, the development suite through the GLM adapter) was p50 about 5.5 s and p95 12.6–14.3 s per scenario ([EVALUATION.md](EVALUATION.md)). The model dominates end-to-end latency; application overhead is milliseconds.
+For comparison, measured live-model latency (GLM 5.2, the development suite through the GLM adapter) was p50 about 5.5 s and p95 12.6–14.3 s per scenario in the two adapter runs, and p50 3.7 s / p95 10.1 s in the final run on the final code ([EVALUATION.md](EVALUATION.md)). The model dominates end-to-end latency; application overhead is milliseconds.
 
 ## Not measured
 

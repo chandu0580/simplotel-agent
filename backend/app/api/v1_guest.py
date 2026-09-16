@@ -20,7 +20,10 @@ from ..schemas import (
 )
 from .deps import container_of, enforce_rate_limits, resolve_guest_context
 
-router = APIRouter(prefix="/api/v1/hotels/{hotel_id}", tags=["guest v1"], responses={404: {"model": V1ErrorResponse}, 422: {"model": V1ErrorResponse}, 429: {"model": V1ErrorResponse}})
+# Errors every guest endpoint can return; all use the V1ErrorResponse envelope.
+_COMMON_ERRORS = {code: {"model": V1ErrorResponse} for code in (404, 413, 422, 429, 500, 503)}
+_CONVERSATION_ERRORS = {409: {"model": V1ErrorResponse, "description": "CONVERSATION_BUSY: another turn on this conversation is in progress (Retry-After)"}}
+router = APIRouter(prefix="/api/v1/hotels/{hotel_id}", tags=["guest v1"], responses=_COMMON_ERRORS)
 
 DEGRADATION_MESSAGES = {
     "LLM_TIMEOUT": "The AI model did not respond in time; the answer came from the hotel FAQ.",
@@ -101,7 +104,7 @@ def delete_conversation(hotel_id: str, conversation_id: str, request: Request):
     return Response(status_code=204)
 
 
-@router.post("/conversations/{conversation_id}/messages", response_model=ConversationTurnResponse)
+@router.post("/conversations/{conversation_id}/messages", response_model=ConversationTurnResponse, responses=_CONVERSATION_ERRORS)
 def post_message(hotel_id: str, conversation_id: str, body: PostMessageRequest, request: Request):
     # Sync endpoint: FastAPI runs it in the worker thread pool, so the LLM call and the rate-limit/state
     # round trips (Redis in multi-replica mode) never block the event loop.
@@ -125,7 +128,7 @@ def post_message(hotel_id: str, conversation_id: str, body: PostMessageRequest, 
     )
 
 
-@router.post("/conversations/{conversation_id}/availability", response_model=AvailabilityResult, responses={503: {"model": V1ErrorResponse}})
+@router.post("/conversations/{conversation_id}/availability", response_model=AvailabilityResult, responses=_CONVERSATION_ERRORS)
 def conversation_availability(hotel_id: str, conversation_id: str, body: AvailabilityRequest, request: Request):
     """Booking-form submission: deterministic search, recorded in the conversation's context."""
     ctx = resolve_guest_context(request, hotel_id)
@@ -133,7 +136,7 @@ def conversation_availability(hotel_id: str, conversation_id: str, body: Availab
     return container_of(request).conversations.check_availability(ctx, conversation_id, AvailabilityQuery(**body.model_dump()))
 
 
-@router.post("/availability", response_model=AvailabilityResult, responses={503: {"model": V1ErrorResponse}})
+@router.post("/availability", response_model=AvailabilityResult)
 def availability(hotel_id: str, body: AvailabilityRequest, request: Request):
     """Stateless availability search (e.g. for a booking-engine widget)."""
     ctx = resolve_guest_context(request, hotel_id)

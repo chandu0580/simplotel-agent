@@ -2,7 +2,8 @@ import { defineConfig, devices } from '@playwright/test'
 
 // Runs the real FastAPI backend and the Vite frontend together on dedicated ports.
 // The backend runs with AI disabled by default so the E2E suite is deterministic and free;
-// set E2E_USE_AI=true (with ANTHROPIC_API_KEY in backend/.env) to exercise the live model.
+// set E2E_USE_AI=true to exercise the live model configured in backend/.env: the provider is chosen by
+// LLM_PROVIDER (default glm, which needs LLM_API_KEY and LLM_BASE_URL; or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY).
 const useAI = process.env.E2E_USE_AI === 'true'
 const python = process.env.E2E_PYTHON ?? (process.platform === 'win32' ? '.venv\\Scripts\\python' : '.venv/bin/python')
 const BACKEND_PORT = 8001

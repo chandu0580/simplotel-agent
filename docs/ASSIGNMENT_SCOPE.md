@@ -59,5 +59,5 @@ None of this was required by the assignment. It is a foundation, not a productio
 ## 4. Still not done, in either phase
 
 - Anthropic live API: NOT VERIFIED — no Anthropic credential. GLM (`glm-5.2`) is now the default runtime provider; its eval runs are GLM-runtime evidence only, not Claude verification.
-- There is no real PMS or booking integration and no production authentication. PostgreSQL stores only the audit trail; the other database repositories exist as schema only.
+- There is no real PMS or booking integration and no production authentication. PostgreSQL stores the audit trail plus tenant and hotel rows synced from the tenant registry at startup; the other database repositories exist as schema only.
 - Nothing has been deployed or measured against SLOs. The only load test is a local single-machine benchmark, not production capacity.

@@ -206,10 +206,13 @@ def is_critical(scenario: dict, tags: list[str]) -> bool:
     return bool(CRITICAL_TAGS & set(tags)) or scenario["category"] == "Multi-tenant"
 
 
-def compare_with_baseline(rows: list[dict], baseline_path: Path) -> list[str]:
+def load_baseline(baseline_path: Path) -> dict[str, str]:
     raw = json.loads(baseline_path.read_text(encoding="utf-8"))
     baseline_rows = raw["rows"] if isinstance(raw, dict) else raw
-    before = {r["id"]: r["status"] for r in baseline_rows}
+    return {r["id"]: r["status"] for r in baseline_rows}
+
+
+def compare_with_baseline(rows: list[dict], before: dict[str, str]) -> list[str]:
     return [r["id"] for r in rows if before.get(r["id"]) == "PASS" and r["status"] == "FAIL"]
 
 
@@ -229,12 +232,14 @@ def main() -> int:
     parser.add_argument("--mode", choices=["offline", "ai"], default="offline")
     parser.add_argument("--only", help="regex filter on scenario id")
     parser.add_argument("--tag", help="only run scenarios with this tag")
-    parser.add_argument("--label", help="results file name (default: the mode); always set it for non-Anthropic endpoints")
+    parser.add_argument("--label", help="results file name (default: the mode, or <suite>-<mode> for non-development suites)")
     parser.add_argument("--provider-note", default="", help="note written at the top of the results file")
     parser.add_argument("--baseline", type=Path, help="previous results .json; exit 3 if a previously passing scenario now fails")
     parser.add_argument("--suite", choices=sorted(SUITES), default="development")
     parser.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any critical scenario fails")
     args = parser.parse_args()
+    # Read the baseline before anything is written: the default output file can be the baseline itself.
+    baseline = load_baseline(args.baseline) if args.baseline else None
 
     container, failing_container = build(args.mode)
     logging.getLogger().setLevel(logging.ERROR)
@@ -289,7 +294,7 @@ def main() -> int:
     print(f"\n{summary['passed']}/{summary['ran']} passed ({summary['skipped']} skipped) in mode={args.mode}")
     print(json.dumps({k: v for k, v in summary.items() if k not in ("scenarios", "ran", "passed", "skipped")}, indent=2))
 
-    label = args.label or args.mode
+    label = args.label or (args.mode if args.suite == "development" else f"{args.suite}-{args.mode}")
     versions = sorted({json.dumps(r["versions"], sort_keys=True) for r in rows if r.get("versions")})
     meta = {"mode": args.mode, "suite": args.suite, "label": label, "run_date": today.isoformat(), "provider_note": args.provider_note, "versions": [json.loads(v) for v in versions]}
     out_dir = EVAL_DIR / "results"
@@ -310,18 +315,18 @@ def main() -> int:
         lines.append(f"| `{r['id']}` | {', '.join(r['tags'])} | {r['status']} | {r['served_by']} | {r.get('decision', '-')} | {r['type']} | {r['latency_ms']} ms | {notes.replace('|', '/')} |")
     (out_dir / f"{label}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    if args.baseline:
-        regressions = compare_with_baseline(rows, args.baseline)
+    if baseline is not None:
+        regressions = compare_with_baseline(rows, baseline)
         if regressions:
             critical = [r["id"] for r in rows if r["id"] in regressions and r.get("critical")]
             print(f"REGRESSIONS vs {args.baseline}: {regressions} (critical: {critical})")
             return 3
+        print(f"No regressions vs {args.baseline}")
     if args.fail_on_critical:
         failed_critical = [r["id"] for r in rows if r.get("critical") and r["status"] == "FAIL"]
         if failed_critical:
             print(f"CRITICAL SCENARIOS FAILED: {failed_critical}")
             return 4
-        print(f"No regressions vs {args.baseline}")
     return 0 if summary["passed"] == summary["ran"] else 1
 
 

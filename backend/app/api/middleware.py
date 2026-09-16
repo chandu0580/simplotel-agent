@@ -6,9 +6,11 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 
 from ..core.errors import ErrorCode
 from ..core.observability import bind_context, log_event, reset_context
+from .deps import ip_limit_exceeded
 from .errors import error_response
 
 logger = logging.getLogger("hotel_assistant.api")
@@ -36,7 +38,15 @@ def install_middleware(app: FastAPI) -> None:
         except ValueError:
             too_large = True
         try:
-            if too_large:
+            # IP limits first, for every API request (including unknown routes and invalid bodies).
+            blocked = await run_in_threadpool(ip_limit_exceeded, request) if request.url.path.startswith("/api/") else None
+            if blocked:
+                rule, decision = blocked
+                response = error_response(
+                    request, 429, ErrorCode.RATE_LIMITED, "Too many requests. Please wait a moment and try again.",
+                    details=[{"dimension": rule.dimension}], headers={"Retry-After": str(decision.retry_after_seconds)},
+                )
+            elif too_large:
                 response = error_response(request, 413, ErrorCode.PAYLOAD_TOO_LARGE, f"Request body exceeds {MAX_BODY_BYTES // 1024} KB.")
             else:
                 response = await call_next(request)

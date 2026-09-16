@@ -31,10 +31,10 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Circuit breaker | IMPLEMENTED + TESTED | Single half-open trial (5 concurrent callers → 1 trial), failed trial reopens, business errors never count, retries count once | Per-process state (by design) |
 | Timeouts | IMPLEMENTED + TESTED | LLM HTTP timeouts close the connection (real slow server); tool and integration timeouts; retry deadline below tool timeout | Timed-out Python threads are not cancelled (documented; mutations rely on idempotency) |
 | Error model | IMPLEMENTED + TESTED | Stable codes and envelope, `meta.degradation`, no stack traces (`tests/test_errors.py`: 422, 404, 405, 413, 503 knowledge, 500 hidden detail, degradation per failure kind) | — |
-| Rate limiting | IMPLEMENTED + TESTED | ip_burst, ip (before hotel resolution), tenant, hotel, conversation; 429 + Retry-After; shared across instances when Redis is used (tested in-process) | Fails open when Redis is down (deliberate); no API-key dimension |
+| Rate limiting | IMPLEMENTED + TESTED | ip_burst and ip in the HTTP middleware for every `/api/` request (unknown routes and invalid bodies count), then tenant, hotel, conversation; 429 + Retry-After; shared across instances when Redis is used (tested in-process) | Fails open when Redis is down (deliberate); no API-key dimension |
 | Security test suite | IMPLEMENTED + TESTED | Guardrail, injection, exfiltration, tool-authorization, cross-tenant, error and privacy tests; holdout adversarial evals (offline 12/12, GLM 12/12, critical 10/10) | Penetration test; live-model red teaming beyond 12 holdout scenarios |
 | Secret hygiene | IMPLEMENTED + TESTED | `scripts/scan_secrets.py`: tracked files 0 findings, frontend bundle 0, eval results 0; settings `repr` and log redaction tests | Scanner not yet run in GitHub CI |
-| Security headers | IMPLEMENTED + TESTED (API) / NOT IMPLEMENTED (static hosting) | Backend sets nosniff, DENY, no-referrer, `Cache-Control: no-store` on `/api`, HSTS in production (`test_security_headers_request_ids_and_trace_propagation`) | CSP, Permissions-Policy and HSTS for the built SPA are a hosting requirement ([DEPLOYMENT.md](DEPLOYMENT.md)) |
+| Security headers | IMPLEMENTED + TESTED (API) / NOT IMPLEMENTED (static hosting) | Backend sets nosniff, DENY, no-referrer, `Cache-Control: no-store` on `/api`, HSTS in production (`app/api/middleware.py`). `test_security_headers_request_ids_and_trace_propagation` asserts `X-Content-Type-Options`, `X-Frame-Options` and `Cache-Control`; `Referrer-Policy` and HSTS are set in code but not asserted by a test | CSP, Permissions-Policy and HSTS for the built SPA are a hosting requirement ([DEPLOYMENT.md](DEPLOYMENT.md)) |
 | Privacy (minimisation) | IMPLEMENTED + TESTED | Card/email/phone masking before model, storage and traces; false-positive tests; `pii_masked_total` ([PRIVACY.md](PRIVACY.md)) | Names/addresses not detected |
 | Retention and deletion | IMPLEMENTED + TESTED | Conversation TTL (memory and Redis), DELETE → 404 thereafter, DB retention job under RLS | Retention job not scheduled; log retention not configured |
 | Observability | IMPLEMENTED + TESTED | Access logs and traces carry request, trace, tenant, hotel and conversation ids; latency breakdown; metrics asserted to move (`tests/test_observability.py`) | Log shipping, dashboards, alerting, trace export not deployed |
@@ -59,7 +59,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Check | Result |
 |---|---|
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
-| Backend pytest without services (CI `backend` job equivalent) | **270 passed, 22 skipped** (integration) |
+| Backend pytest without services (CI `backend` job equivalent; release-candidate audit) | **275 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
 | Frontend Vitest | **19 passed** |
 | Playwright E2E (desktop + mobile, AI disabled) | **6 passed** |

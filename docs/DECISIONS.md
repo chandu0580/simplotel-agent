@@ -94,7 +94,7 @@ Several layers, so no single one has to be perfect:
 | **Request hangs** | The client aborts after 45 s and shows a timeout message with retry. After 8 s the indicator already says "Still working on it…". |
 | **Backend 500** | A generic friendly message; stack traces never reach the client. The `request_id` ties the failure to the server logs. |
 | **Invalid input** (422) | Schema errors list the invalid fields. Booking-rule errors appear inside the form, and the guest's entries are kept. |
-| **`/api/hotel` fails** | The header uses built-in defaults and chat still works. |
+| **Hotel profile request (`GET /api/v1/hotels/{id}`) fails** | The header uses built-in defaults (hotel and assistant name, default colour, English only) and chat still works. |
 | **Availability data unavailable** (in production, a PMS or booking engine outage) | The mock sits behind a resilience wrapper: a 5 s timeout per attempt, read retries bounded by a 16 s deadline, and a circuit breaker. In chat the guest gets "I can't check live availability right now" with contact details (`200`, `meta.degradation` `RESERVATION_UNAVAILABLE`, `TOOL_TIMEOUT` or `TOOL_UNAVAILABLE`); the booking form gets `503 RESERVATION_UNAVAILABLE` with `Retry-After: 30`. Only successful results from the last 15 s are served from cache; an expired entry is never used as a fallback. No real PMS is connected; see [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md). |
 | **Conversation busy** (a second message while the first is still being answered, another tab, a double submit) | `409 CONVERSATION_BUSY` with `Retry-After: 2`. The chat client waits (capped at 3 s) and retries once, then shows "Still answering your previous message". |
 | **Shared state unavailable** (Redis down, multi-replica mode) | Conversation reads and writes return `503 STATE_UNAVAILABLE`; the UI shows its "temporarily unavailable" message. The rate limiter fails open and counts the errors. |
@@ -135,21 +135,21 @@ These are **proposed** metrics. Nothing here has been measured in production.
 ## What would you improve before taking this to production?
 
 1. **Real integrations.** Connect to live availability and rates from the booking engine or PMS, turn room cards into deep links to booking with dates pre-filled, and support multi-room bookings for large groups.
-2. **Knowledge management.** Let hotel staff edit the knowledge base through an admin UI instead of JSON, with versioning, per-hotel tenancy, and automatic eval re-runs whenever content changes.
+2. **Knowledge management.** Let hotel staff edit the knowledge base through an admin UI instead of JSON, with versioning and automatic eval re-runs whenever content changes. (Per-hotel tenancy has since been implemented: `app/tenancy.py`, per-hotel `hotel.json` and inventory.)
 3. **Safety and quality.**
    - Groundedness checking with an LLM judge on sampled traffic.
    - A larger eval set built from real anonymised questions, gating CI.
    - Moderation. (Masking of card numbers, emails and phone numbers before the model is now implemented; names and addresses are not detected. See [PRIVACY.md](PRIVACY.md).)
-   - Multilingual support: Hindi and other regional languages matter for this market.
+   - Multilingual support: Hindi and other regional languages matter for this market. (A Hindi UI has since been implemented as a draft pending native review; the offline engine still answers in English only.)
 4. **Streaming responses** for better perceived latency, and re-tune `effort` per route from measured quality.
 5. **Abuse and cost controls.** Bot protection, token budgets per conversation, and alerts on cost anomalies. (Rate limiting by IP burst, IP, tenant, hotel and conversation, and a 64 KB request size limit in the backend, are now implemented.)
 6. **Human handoff.** Hand a conversation to a human agent with the full transcript and analytics. (Server-side conversations, so the client can't forge history, are now implemented, in memory or shared in Redis.)
 7. **Observability.** OpenTelemetry traces, and dashboards and alerts for the metrics above. (JSON logs with secret redaction and request, tenant and conversation context are implemented.)
 8. **Frontend.**
    - An embeddable widget build that loads in the hotel's site without slowing it down.
-   - Theming per hotel brand.
+   - Theming per hotel brand. (Since implemented: `HotelProfile.brand` sets the assistant name and primary colour.)
    - Chat history saved in session storage so it survives a refresh.
-   - Localisation.
+   - Localisation. (Since implemented: `frontend/src/i18n` with English and a draft Hindi catalogue, native review pending.)
    - Full keyboard and screen-reader testing.
 9. **Privacy and compliance.** A consent notice, and compliance with India's DPDP Act (and GDPR for EU guests). No compliance certification is claimed. (Guest deletion, conversation TTLs and a retention job for PostgreSQL audit events exist; see [PRIVACY.md](PRIVACY.md).)
 
@@ -238,7 +238,7 @@ The production hardening and evidence phase added shared state, a durable audit 
 - Replicas share conversations, limits, idempotency results and locks. Readiness includes a `state` check, and `/ready` returns 503 when Redis is unreachable.
 - A Redis outage returns 503 `STATE_UNAVAILABLE` for conversations and locks, makes the idempotency store report `UNAVAILABLE`, and leaves rate limits unenforced (logged, counted in `state_backend_errors_total{component="rate_limiter"}`), because rejecting every guest would be worse than briefly unenforced limits.
 - Replicas can briefly serve different cached knowledge or availability, up to the cache TTL. Circuit breaker state is also per process.
-- Only the audit sink is wired to PostgreSQL. Repositories for conversations, messages, tool calls, bookings, knowledge and evaluations are designed (schema only), not implemented.
+- Only the audit sink is wired to PostgreSQL: it writes audit events and, at startup, syncs tenant and hotel rows from the tenant registry (`PostgresAuditSink.sync_tenants`). Repositories for conversations, messages, tool calls, bookings, knowledge and evaluations are designed (schema only), not implemented.
 
 **Evidence.**
 - `tests/integration/test_redis_state.py` (real Redis 7.4; verified locally once, not run in CI): compare-and-set and native TTL, a rate limit shared across 3 limiters (5 allowed of 9), fail-open, 503 on outage, locks across clients, idempotency across 3 stores (9 concurrent calls, operation ran once), `IN_PROGRESS`; three in-process replicas: 6 concurrent turns stored 12 messages, 9 concurrent duplicate bookings produced 1 booking id, a shared IP limit allowed 6 of 9, availability results were identical, a cross-tenant read on another replica returned 404, and readiness returned 503 with Redis unreachable.
