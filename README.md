@@ -47,6 +47,8 @@ The model interprets questions and writes answers. **Code decides the facts that
 
 **Prerequisites:** Python 3.11+ (developed on 3.13), Node.js 20+ (developed on 22), and an Anthropic API key if you want AI mode.
 
+> **Windows:** clone into a short path (e.g. `C:\dev\simplotel-agent`) or [enable long paths](https://pip.pypa.io/warnings/enable-long-paths). Some files in the Anthropic SDK have very long names; in a deeply nested folder `pip install` silently skips them and the backend fails with `ModuleNotFoundError: anthropic.types...`. This was hit during clean-clone verification.
+
 ### 1. Backend
 
 ```bash
