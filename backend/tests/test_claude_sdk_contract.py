@@ -46,9 +46,13 @@ def _assistant(kb, handler, refusal_fallback="default"):
     return ClaudeAssistant(kb, client.beta.messages, model="claude-opus-5", effort="low", refusal_fallback=refusal_fallback), captured
 
 
+def _answer_block(answer: dict) -> dict:
+    return {"type": "tool_use", "id": "toolu_answer", "name": "answer_guest", "input": answer}
+
+
 def test_request_on_the_wire_matches_the_messages_api_contract(kb):
     answer = {"type": "answer", "text": "Check-in is from 2:00 PM.", "source_ids": ["timings.check_in_out"], "suggestions": []}
-    assistant, captured = _assistant(kb, lambda _r: (200, _message([{"type": "text", "text": json.dumps(answer)}], "end_turn")))
+    assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")))
 
     reply = assistant.reply(ChatRequest(message="What time is check-in?"), TODAY)
 
@@ -60,10 +64,10 @@ def test_request_on_the_wire_matches_the_messages_api_contract(kb):
     body = json.loads(request.content)
     assert body["model"] == "claude-opus-5"
     assert body["fallbacks"] == "default"
-    assert body["output_config"]["effort"] == "low"
-    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert body["output_config"] == {"effort": "low"}
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert [t["name"] for t in body["tools"]] == ["check_availability", "request_booking_details"]
+    assert [t["name"] for t in body["tools"]] == ["answer_guest", "check_availability", "request_booking_details"]
     assert all(t["strict"] is True and t["input_schema"]["additionalProperties"] is False for t in body["tools"])
     assert body["messages"][-1]["role"] == "user"
     assert "thinking" not in body  # Opus 5 runs adaptive thinking by default
@@ -71,7 +75,7 @@ def test_request_on_the_wire_matches_the_messages_api_contract(kb):
 
 def test_refusal_fallback_can_be_disabled(kb):
     answer = {"type": "clarification", "text": "Hello!", "source_ids": [], "suggestions": []}
-    assistant, captured = _assistant(kb, lambda _r: (200, _message([{"type": "text", "text": json.dumps(answer)}], "end_turn")), refusal_fallback="none")
+    assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")), refusal_fallback="none")
 
     assistant.reply(ChatRequest(message="hi"), TODAY)
 
@@ -114,7 +118,7 @@ def test_refusal_stop_reason_becomes_llm_error(kb):
 
 def test_booking_context_is_sent_to_the_model(kb):
     answer = {"type": "clarification", "text": "Sure.", "source_ids": [], "suggestions": []}
-    assistant, captured = _assistant(kb, lambda _r: (200, _message([{"type": "text", "text": json.dumps(answer)}], "end_turn")))
+    assistant, captured = _assistant(kb, lambda _r: (200, _message([_answer_block(answer)], "tool_use")))
 
     assistant.reply(
         ChatRequest(message="Same dates, but for 3 adults.", booking_context=BookingContext(check_in="2026-10-07", check_out="2026-10-09", adults=2)),

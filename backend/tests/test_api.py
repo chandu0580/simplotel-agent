@@ -1,7 +1,8 @@
 import anthropic
 import httpx
+import pytest
 
-from tests.conftest import text_response, tool_response
+from tests.conftest import answer_response, text_response, tool_response
 
 
 def _api_status_error(status: int) -> anthropic.APIStatusError:
@@ -79,7 +80,7 @@ def test_chat_rejects_unknown_fields_and_long_history(offline_client):
 
 def test_ai_answer_returns_cited_sources(ai_client, fake_messages):
     fake_messages.responses.append(
-        text_response(
+        answer_response(
             {
                 "type": "answer",
                 "text": "Check-in is from 2:00 PM and check-out is by 11:00 AM.",
@@ -98,14 +99,16 @@ def test_ai_answer_returns_cited_sources(ai_client, fake_messages):
     assert body["reply"]["sources"] == [{"id": "timings.check_in_out", "title": "Check-in and check-out times"}]
     call = fake_messages.calls[0]
     assert call["model"] == "claude-opus-5"
-    assert call["output_config"]["format"]["type"] == "json_schema"
+    assert [t["name"] for t in call["tools"]] == ["answer_guest", "check_availability", "request_booking_details"]
+    assert call["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert "format" not in call["output_config"]
     assert "<guest_message>\nWhat time is check-in?\n</guest_message>" in call["messages"][-1]["content"]
     assert "Today's date at the hotel: 2026-10-05 (Monday)" in call["messages"][-1]["content"]
 
 
 def test_ai_answer_without_valid_sources_is_downgraded_to_fallback(ai_client, fake_messages, kb):
     fake_messages.responses.append(
-        text_response({"type": "answer", "text": "Yes, we have a rooftop casino.", "source_ids": ["amenities.casino"], "suggestions": []})
+        answer_response({"type": "answer", "text": "Yes, we have a rooftop casino.", "source_ids": ["amenities.casino"], "suggestions": []})
     )
 
     body = ai_client.post("/api/chat", json={"message": "Do you have a casino?"}).json()
@@ -118,13 +121,53 @@ def test_ai_answer_without_valid_sources_is_downgraded_to_fallback(ai_client, fa
 
 def test_ai_fallback_always_includes_contact_details(ai_client, fake_messages, kb):
     fake_messages.responses.append(
-        text_response({"type": "fallback", "text": "I don't have details about spa packages for couples.", "source_ids": [], "suggestions": []})
+        answer_response({"type": "fallback", "text": "I don't have details about spa packages for couples.", "source_ids": [], "suggestions": []})
     )
 
     body = ai_client.post("/api/chat", json={"message": "Do you have couples spa packages?"}).json()
 
     assert body["reply"]["type"] == "fallback"
     assert kb.hotel.phone in body["reply"]["text"]
+
+
+def test_json_text_answer_without_tool_call_is_still_accepted(ai_client, fake_messages):
+    fake_messages.responses.append(
+        text_response({"type": "answer", "text": "The pool is open 7 AM to 8 PM.", "source_ids": ["amenities.pool"], "suggestions": []})
+    )
+
+    body = ai_client.post("/api/chat", json={"message": "Pool hours?"}).json()
+
+    assert body["mode"] == "ai"
+    assert body["reply"]["sources"][0]["id"] == "amenities.pool"
+
+
+def test_plain_text_reply_instead_of_tool_call_degrades_to_offline(ai_client, fake_messages):
+    fake_messages.responses.append(text_response("Let me check availability for you right away."))
+
+    body = ai_client.post("/api/chat", json={"message": "Do you have rooms available?"}).json()
+
+    assert body["mode"] == "offline"
+    assert body["reply"]["type"] == "collect_booking_details"
+
+
+def test_invalid_answer_tool_arguments_degrade_to_offline(ai_client, fake_messages):
+    fake_messages.responses.append(answer_response({"type": "maybe", "text": "", "source_ids": "pool", "suggestions": []}))
+
+    body = ai_client.post("/api/chat", json={"message": "Do you have a pool?"}).json()
+
+    assert body["mode"] == "offline"
+    assert body["reply"]["sources"][0]["id"] == "amenities.pool"
+
+
+def test_action_tool_wins_over_parallel_answer_call(ai_client, fake_messages):
+    response = tool_response("check_availability", {"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 2, "children": 0})
+    answer = answer_response({"type": "answer", "text": "Let me check.", "source_ids": [], "suggestions": []}).content[0]
+    response.content.insert(0, answer)
+    fake_messages.responses.append(response)
+
+    body = ai_client.post("/api/chat", json={"message": "Rooms 7-9 Oct for 2?"}).json()
+
+    assert body["reply"]["type"] == "availability"
 
 
 # ---------- AI mode: tools ----------
@@ -191,6 +234,45 @@ def test_new_check_in_from_model_is_not_mixed_with_old_check_out(ai_client, fake
     assert body["reply"]["booking_prefill"] == {"check_in": "2026-10-14", "check_out": None, "adults": 2, "children": None}
 
 
+def test_string_null_tool_arguments_are_treated_as_missing(ai_client, fake_messages):
+    fake_messages.responses.append(
+        tool_response(
+            "request_booking_details",
+            {"message": "Which dates?", "check_in": "2026-10-14", "check_out": "null", "adults": "null", "children": "None"},
+        )
+    )
+
+    body = ai_client.post("/api/chat", json={"message": "Can I stay next Wednesday?"}).json()
+
+    assert body["mode"] == "ai"
+    assert body["reply"]["booking_prefill"] == {"check_in": "2026-10-14", "check_out": None, "adults": None, "children": None}
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "expected_type", "expected_text"),
+    [
+        ({"check_in": "2026-02-30", "check_out": "2026-10-09", "adults": 2, "children": 0}, "collect_booking_details", None),  # invalid date
+        ({"check_in": "2026-10-09", "check_out": "2026-10-07", "adults": 2, "children": 0}, "collect_booking_details", "after the check-in"),
+        ({"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 0, "children": 0}, "collect_booking_details", None),  # zero guests
+        ({"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": -2, "children": 0}, "collect_booking_details", "adult"),
+        ({"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 2, "children": -1}, "collect_booking_details", "negative"),
+        ({"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 40, "children": 0}, "availability", "No single room type"),
+        ({"check_in": None, "check_out": None, "adults": 2, "children": 0}, "collect_booking_details", None),  # missing dates
+    ],
+)
+def test_availability_tool_edge_cases_never_error(ai_client, fake_messages, tool_input, expected_type, expected_text):
+    fake_messages.responses.append(tool_response("check_availability", tool_input))
+
+    response = ai_client.post("/api/chat", json={"message": "Rooms please"})
+
+    assert response.status_code == 200
+    reply = response.json()["reply"]
+    assert reply["type"] == expected_type
+    if expected_text:
+        shown = (reply["form_error"] or "") + reply["text"]
+        assert expected_text in shown
+
+
 def test_malformed_tool_arguments_degrade_to_offline(ai_client, fake_messages):
     fake_messages.responses.append(
         tool_response("check_availability", {"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": "three", "children": 0})
@@ -227,7 +309,7 @@ def test_unexpected_sdk_error_degrades_to_offline(ai_client, fake_messages):
 
 def test_follow_up_sends_history_and_booking_context_to_model(ai_client, fake_messages):
     fake_messages.responses.append(
-        text_response({"type": "answer", "text": "Yes, breakfast is included in the Deluxe Pool View Room.", "source_ids": ["amenities.dining"], "suggestions": []})
+        answer_response({"type": "answer", "text": "Yes, breakfast is included in the Deluxe Pool View Room.", "source_ids": ["amenities.dining"], "suggestions": []})
     )
     history = [
         {"role": "assistant", "content": "Hi! How can I help?"},

@@ -115,6 +115,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["offline", "ai"], default="offline")
     parser.add_argument("--only", help="regex filter on scenario id")
+    parser.add_argument(
+        "--label",
+        help="results file name (default: the mode). Use a distinct label when --mode ai is pointed at a non-Anthropic "
+        "endpoint via ANTHROPIC_BASE_URL, so those results can't be mistaken for Claude results.",
+    )
+    parser.add_argument("--provider-note", default="", help="note written at the top of the results file")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -148,6 +154,10 @@ def main() -> int:
         response = run_conversation(service, turns, today)
         latency = int((time.perf_counter() - started) * 1000)
         failures = check(response, fill(scenario["expect"], variables))
+        # The offline fallback can satisfy many expectations on its own; in AI mode that must not
+        # count as a pass, or a broken model integration would look healthy.
+        if args.mode == "ai" and not scenario.get("simulate_llm_failure") and response.mode != "ai":
+            failures.insert(0, "model call failed; answered by offline fallback")
         rows.append(
             {
                 "id": scenario["id"],
@@ -170,13 +180,20 @@ def main() -> int:
 
     out_dir = EVAL_DIR / "results"
     out_dir.mkdir(exist_ok=True)
-    (out_dir / f"{args.mode}.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    lines = [f"# Eval results — mode `{args.mode}` — run on {today.isoformat()}", "", f"**{passed}/{len(ran)} passed**, {len(rows) - len(ran)} skipped", "",
-             "| Scenario | Category | Result | Reply type | Latency | Notes |", "|---|---|---|---|---|---|"]
+    label = args.label or args.mode
+    (out_dir / f"{label}.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    header = f"# Eval results — mode `{args.mode}` — run on {today.isoformat()}"
+    if args.mode == "ai":
+        header += f" — model `{settings.model}`"
+    lines = [header, ""]
+    if args.provider_note:
+        lines += [f"> {args.provider_note}", ""]
+    lines += [f"**{passed}/{len(ran)} passed**, {len(rows) - len(ran)} skipped", "",
+              "| Scenario | Category | Result | Served by | Reply type | Latency | Notes |", "|---|---|---|---|---|---|---|"]
     for r in rows:
         notes = "; ".join(r["failures"]) or r["reply"].replace("\n", " ")[:110]
-        lines.append(f"| `{r['id']}` | {r['category']} | {r['status']} | {r['type']} | {r['latency_ms']} ms | {notes.replace('|', '/')} |")
-    (out_dir / f"{args.mode}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines.append(f"| `{r['id']}` | {r['category']} | {r['status']} | {r.get('mode', '-')} | {r['type']} | {r['latency_ms']} ms | {notes.replace('|', '/')} |")
+    (out_dir / f"{label}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0 if passed == len(ran) else 1
 
 

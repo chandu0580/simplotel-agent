@@ -71,13 +71,15 @@
 Several layers, so no single one has to be perfect:
 
 1. **Grounding the prompt.** The full, curated knowledge base goes in the system prompt, with explicit rules: only use these facts, say what you don't know, correct false premises, and never invent availability or bookings. The knowledge base is small, so there's no retrieval step that could miss the relevant entry.
-2. **Structured output with citations.** The model must return `type` and `source_ids`. Code checks each id against the knowledge base and drops unknown ones. **An "answer" with no valid citation is replaced by a fallback.**
+2. **Strict answer tool with citations.** Every answer goes through the `answer_guest` tool, which requires `type` and `source_ids`. Code checks each id against the knowledge base and drops unknown ones. **An "answer" with no valid citation is replaced by a fallback.**
 3. **Numbers never come from the model.** Availability and prices come from the tool result and go straight to the UI.
 4. **Strict tool schemas plus server-side validation.** Even valid-looking arguments (for example a past date) are re-checked, and the guest is asked to correct them.
-5. **Guaranteed escalation.** Every fallback includes front-desk contact details, added by code.
-6. **Treating guest text as data.** Guest input is wrapped in `<guest_message>` tags and the system prompt says it can't override instructions.
-7. **Evals as a regression gate.** Scenarios for false premises, unsupported questions, prompt injection and ambiguity run before every prompt or model change. See [EVALUATION.md](EVALUATION.md).
-8. **What I'd add for production:**
+5. **Absence isn't evidence.** The prompt says: if the knowledge base doesn't mention something, say you don't have information and fall back. Only claim the hotel *doesn't* offer something when the knowledge base says so (as it does for EV charging and pets). Added after a development model answered "no, there's no casino" from silence.
+6. **Clarify instead of guessing.** Missing dates or guests, or an ambiguous relative date, lead to a pre-filled form that names the assumed date, never a silent guess. Date validity is left to deterministic code, not the model.
+7. **Guaranteed escalation.** Every fallback includes front-desk contact details, added by code.
+8. **Treating guest text as data.** Guest input is wrapped in `<guest_message>` tags and the system prompt says it can't override instructions.
+9. **Evals as a regression gate.** In AI mode, a scenario answered by the offline fallback counts as a failure, so a broken model integration can't hide behind the fallback. Scenarios for false premises, unsupported questions, prompt injection and ambiguity run before every prompt or model change. See [EVALUATION.md](EVALUATION.md).
+10. **What I'd add for production:**
    - Sample conversations weekly and label them for groundedness.
    - Have a second, cheaper model judge whether the answer is supported by the cited entries, and flag or block it if not.
    - Log uncited or fallback questions to show where the knowledge base has gaps.
@@ -157,6 +159,8 @@ These are **proposed** metrics. Nothing here has been measured in production.
 **Why a JSON knowledge base?** Hotel information is small, structured and changes rarely. JSON is easy to review in a PR, validates at startup, and each entry has a stable id the model must cite. Room entries are generated from the same room data the availability service uses, so the two can't drift apart.
 
 **Why not a vector database or RAG?** The knowledge base is about 2.8k tokens and fits entirely in the prompt, so retrieval would add a component that can *miss* the right entry, plus an embedding pipeline to maintain, and remove no hallucination risk. A production system with large or multi-property content (long policy documents, local guides) would add semantic retrieval, keeping the same citation check.
+
+**Why is the answer a tool call?** One decision per turn: answer, check availability, or ask for details, each with a strict schema. It doesn't depend on a provider supporting a JSON output format and tool calls in the same request. A real development model stopped calling tools when both were enabled. Details in [ARCHITECTURE.md](ARCHITECTURE.md#why-the-answer-is-a-tool-not-a-json-output-format).
 
 **Why use an LLM at all?** Guests phrase things freely: "we're 2 + a kid", "next weekend", "does *it* include breakfast?". An LLM handles paraphrase, follow-ups, false premises, relative dates and choosing between answering and checking availability far better than rules. The offline engine shows what rules alone give you: correct but literal, and date handling limited to ISO format.
 

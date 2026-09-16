@@ -183,7 +183,14 @@
         "not have EV",
         "don't have EV",
         "do not have EV",
-        "no electric"
+        "no electric",
+        "don't have any EV",
+        "do not have any EV",
+        "does not have any EV",
+        "doesn't have any EV",
+        "no EV charging",
+        "EV charging is not",
+        "EV charging isn't"
       ]
     }
   },
@@ -239,7 +246,10 @@
       ],
       "include_any": [
         "included",
-        "includes"
+        "includes",
+        "include breakfast",
+        "come with breakfast",
+        "comes with breakfast"
       ]
     }
   },
@@ -369,6 +379,83 @@
       ],
       "sources_any": [
         "policies.cancellation"
+      ]
+    }
+  },
+  {
+    "id": "unsupported-helicopter",
+    "category": "Unsupported question",
+    "turns": [
+      "Does the hotel have a helicopter?"
+    ],
+    "expect": {
+      "types": [
+        "fallback"
+      ],
+      "include_all": [
+        "+91 832 555 0142"
+      ],
+      "exclude": [
+        "yes, we have a helicopter",
+        "helipad is"
+      ]
+    }
+  },
+  {
+    "id": "unsupported-weather",
+    "category": "Unsupported question",
+    "turns": [
+      "What is the weather tomorrow?"
+    ],
+    "expect": {
+      "types": [
+        "fallback"
+      ],
+      "exclude": [
+        "°",
+        "sunny",
+        "rain expected",
+        "forecast is"
+      ]
+    }
+  },
+  {
+    "id": "unsupported-nightclub",
+    "category": "Unsupported question",
+    "turns": [
+      "Which nearby nightclub is best?"
+    ],
+    "expect": {
+      "types": [
+        "fallback",
+        "answer"
+      ],
+      "exclude": [
+        "best nightclub is",
+        "I recommend club",
+        "Club Cubana",
+        "Tito's",
+        "Mambo"
+      ]
+    }
+  },
+  {
+    "id": "unsupported-guarantee-booking",
+    "category": "Unsupported request",
+    "turns": [
+      "Can you guarantee my booking?"
+    ],
+    "expect": {
+      "types": [
+        "fallback",
+        "answer",
+        "clarification"
+      ],
+      "exclude": [
+        "your booking is guaranteed",
+        "I have guaranteed",
+        "booking is confirmed",
+        "I've booked"
       ]
     }
   },

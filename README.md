@@ -19,8 +19,9 @@ The demo property, *The Palm Grove Resort, Goa*, is fictional.
 | | |
 |---|---|
 | Implemented and tested locally | Chat UI, booking form, room results, loading/error/offline states, FastAPI API, knowledge-base grounding checks, deterministic availability, fallback engine |
-| Automated results (2026-09-16) | Backend **75 passed** · Frontend **9 passed** · E2E **6 passed** (desktop + mobile) · Offline eval **17/17** (6 AI-only skipped) |
-| **Live Claude API** | **Not yet verified.** No Anthropic key was available during development. The request format was checked with the real SDK against a mocked HTTP transport, but the live API hasn't been called. See [Evaluation § C](docs/EVALUATION.md#c-live-model-evaluation). |
+| Automated results (2026-09-16) | Backend **87 passed** · Frontend **9 passed** · E2E **6 passed** (desktop + mobile) · Offline eval **21/21** (6 AI-only skipped) · type check, lint, build pass |
+| **Anthropic Claude live API** | **Not executed: no Anthropic API credential was available.** The request format is checked with the real Anthropic SDK against a mocked HTTP transport, which does not prove the live API accepts it. See [Evaluation § C](docs/EVALUATION.md#c-anthropic-claude-live-evaluation). |
+| Development-provider testing (not Claude) | The same model code path run end to end against `glm-5.2` through an Anthropic-compatible gateway: 27-scenario AI-mode eval **26/27** and **27/27** over two runs. This found and fixed real integration issues but is **not** Claude verification. See [Evaluation § D](docs/EVALUATION.md#d-development-provider-evaluation-glm-52--not-claude). |
 | Mocked | Room inventory and rates (`inventory.json`), booking (there is none; guests are pointed to the front desk) |
 
 ## The customer problem
@@ -87,7 +88,7 @@ Open http://localhost:5173. The Vite dev server proxies `/api/*` to `http://127.
 ## Running tests
 
 ```bash
-# Backend unit, API and SDK-contract tests (75); Claude is faked or HTTP-mocked, so no key is needed
+# Backend unit, API and SDK-contract tests (87); the model is faked or HTTP-mocked, so no key is needed
 cd backend && python -m pytest
 
 # Frontend component tests (9): loading, error/retry, forms, results, follow-up context
@@ -97,9 +98,11 @@ cd frontend && npm test
 cd frontend && npx playwright install chromium && npm run test:e2e
 #   E2E_USE_AI=true npm run test:e2e   → same flows against live Claude (needs key)
 
-# Scenario evals (23 scenarios; 6 only run in AI mode)
+# Scenario evals (27 scenarios; 6 only run in AI mode)
 cd backend && python -m evals.run_evals --mode offline   # deterministic engine, free
 cd backend && python -m evals.run_evals --mode ai        # live Claude, costs tokens
+#   Pointing ANTHROPIC_BASE_URL/ANTHROPIC_MODEL at another Anthropic-compatible endpoint also works, but pass
+#   --label <name> so those results are never mistaken for Claude results.
 ```
 
 Results are written to `backend/evals/results/<mode>.md`.
@@ -248,7 +251,7 @@ backend/
   app/
     main.py               FastAPI app: routes, request IDs, error envelope, logging
     service.py            Chooses AI vs offline assistant; degrades on LLM failure
-    claude_assistant.py   Prompt, tools, structured output, grounding checks
+    claude_assistant.py   Prompt, strict tools (answer / availability / details form), grounding checks
     offline.py            Deterministic FAQ matching + availability intent (fallback engine)
     availability.py       Mock inventory, validation, pricing: checkAvailability
     knowledge.py          Loads and validates the knowledge base
@@ -276,11 +279,13 @@ docs/                     Architecture, decisions, evaluation
 - **Children are counted toward room occupancy regardless of age.** The policy says under-6s stay free; the form doesn't collect ages.
 - **English only.** Dates in offline mode are recognised only in ISO format (`2026-10-07`); natural-language dates need AI mode.
 - **Prompt caching is requested but likely inactive.** The prompt prefix (about 2.8k tokens) is probably below the model's minimum cacheable size.
-- **Not verified against the live Claude API** (see Status).
+- **Not verified against the live Anthropic Claude API** (see Status). The development-provider runs used GLM, whose behaviour can differ from Claude's.
+- **Offline mode is literal.** It matches keywords, so off-topic questions sometimes return a loosely related entry (e.g. "nearby nightclub" returns the location entry) rather than a fallback. It never invents facts.
 
 Production next steps are in [docs/DECISIONS.md](docs/DECISIONS.md#what-would-you-improve-before-taking-this-to-production): real booking-engine integration, server-side sessions, rate limiting, observability, an eval pipeline in CI, a knowledge-base admin UI, and multilingual support.
 
 ## AI tools used
 
-- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): scaffolding, implementation, tests, the final engineering audit, and documentation drafts. Every test result quoted in this repo comes from commands actually run.
+- **Claude Code** (Anthropic's coding agent, running Claude Opus 5): scaffolding, implementation, tests, the engineering audits and documentation drafts. Every test and eval result quoted in this repo comes from commands actually run.
+- **GLM (`glm-5.2`, via an Anthropic-compatible gateway):** used only as a development provider to run the AI-mode eval suite through the app's real model code path. It is not the production model, and those runs are not Claude verification.
 - **Claude API (`claude-opus-5`):** the runtime model the backend is built for. Not yet exercised live; see Status.

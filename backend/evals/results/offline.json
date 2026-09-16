@@ -3,7 +3,7 @@
     "id": "faq-check-in",
     "category": "Normal question",
     "status": "PASS",
-    "latency_ms": 21,
+    "latency_ms": 15,
     "mode": "offline",
     "type": "answer",
     "input": [
@@ -85,7 +85,7 @@
     "id": "availability-missing-dates",
     "category": "Missing information",
     "status": "PASS",
-    "latency_ms": 6,
+    "latency_ms": 17,
     "mode": "offline",
     "type": "collect_booking_details",
     "input": [
@@ -99,7 +99,7 @@
     "id": "availability-explicit",
     "category": "Availability / tool call",
     "status": "PASS",
-    "latency_ms": 7,
+    "latency_ms": 14,
     "mode": "offline",
     "type": "availability",
     "input": [
@@ -136,7 +136,7 @@
     "id": "availability-past-date",
     "category": "Incorrect input",
     "status": "PASS",
-    "latency_ms": 2,
+    "latency_ms": 3,
     "mode": "offline",
     "type": "collect_booking_details",
     "input": [
@@ -232,7 +232,7 @@
     "id": "availability-guests-no-dates",
     "category": "Missing information",
     "status": "PASS",
-    "latency_ms": 1,
+    "latency_ms": 0,
     "mode": "offline",
     "type": "collect_booking_details",
     "input": [
@@ -255,7 +255,7 @@
     "id": "follow-up-dates-then-guests",
     "category": "Conversation follow-up",
     "status": "PASS",
-    "latency_ms": 4,
+    "latency_ms": 2,
     "mode": "offline",
     "type": "availability",
     "input": [
@@ -301,10 +301,74 @@
     "failures": []
   },
   {
+    "id": "unsupported-helicopter",
+    "category": "Unsupported question",
+    "status": "PASS",
+    "latency_ms": 1,
+    "mode": "offline",
+    "type": "fallback",
+    "input": [
+      "Does the hotel have a helicopter?"
+    ],
+    "reply": "I'm sorry, I don't have reliable information about that. Our front desk can help 24/7: call +91 832 555 0142, WhatsApp +91 98220 55501 or email stay@palmgroveresort.example.",
+    "sources": [
+      "contact.front_desk"
+    ],
+    "failures": []
+  },
+  {
+    "id": "unsupported-weather",
+    "category": "Unsupported question",
+    "status": "PASS",
+    "latency_ms": 0,
+    "mode": "offline",
+    "type": "fallback",
+    "input": [
+      "What is the weather tomorrow?"
+    ],
+    "reply": "I'm sorry, I don't have reliable information about that. Our front desk can help 24/7: call +91 832 555 0142, WhatsApp +91 98220 55501 or email stay@palmgroveresort.example.",
+    "sources": [
+      "contact.front_desk"
+    ],
+    "failures": []
+  },
+  {
+    "id": "unsupported-nightclub",
+    "category": "Unsupported question",
+    "status": "PASS",
+    "latency_ms": 0,
+    "mode": "offline",
+    "type": "answer",
+    "input": [
+      "Which nearby nightclub is best?"
+    ],
+    "reply": "The resort is a 5-minute walk from Candolim Beach. Fort Aguada is about 3 km away, and Calangute and Baga beaches are 15\u201320 minutes by car. The resort does not have a private beach.",
+    "sources": [
+      "location.beach_nearby"
+    ],
+    "failures": []
+  },
+  {
+    "id": "unsupported-guarantee-booking",
+    "category": "Unsupported request",
+    "status": "PASS",
+    "latency_ms": 1,
+    "mode": "offline",
+    "type": "answer",
+    "input": [
+      "Can you guarantee my booking?"
+    ],
+    "reply": "Standard (flexible) rates can be cancelled free of charge up to 48 hours before the check-in date. Cancellations within 48 hours of check-in, and no-shows, are charged the first night's room rate. Non-refundable promotional rates cannot be cancelled, changed or refunded. Refunds for eligible cancellations are processed to the original payment method within 7 working days.",
+    "sources": [
+      "policies.cancellation"
+    ],
+    "failures": []
+  },
+  {
     "id": "model-failure-fallback",
     "category": "Model failure",
     "status": "PASS",
-    "latency_ms": 4,
+    "latency_ms": 5,
     "mode": "offline",
     "type": "answer",
     "input": [

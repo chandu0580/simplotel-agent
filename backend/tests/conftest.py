@@ -27,6 +27,11 @@ def text_response(payload: dict | str, stop_reason: str = "end_turn") -> SimpleN
     )
 
 
+def answer_response(payload: dict) -> SimpleNamespace:
+    """The normal way the model answers: an `answer_guest` tool call."""
+    return tool_response("answer_guest", payload)
+
+
 def tool_response(name: str, tool_input: dict) -> SimpleNamespace:
     return SimpleNamespace(
         model="claude-opus-5",
