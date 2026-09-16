@@ -1,0 +1,194 @@
+{
+  "hotel": {
+    "id": "palm-grove-goa",
+    "name": "The Palm Grove Resort",
+    "tagline": "A beachside retreat in Candolim, North Goa",
+    "address": "Fort Aguada Road, Candolim, North Goa, Goa 403515, India",
+    "phone": "+91 832 555 0142",
+    "email": "stay@palmgroveresort.example",
+    "whatsapp": "+91 98220 55501",
+    "currency": "INR",
+    "timezone": "Asia/Kolkata",
+    "check_in_time": "14:00",
+    "check_out_time": "11:00"
+  },
+  "rooms": [
+    {
+      "id": "garden-standard",
+      "name": "Garden Standard Room",
+      "description": "Cosy room overlooking the tropical garden, ideal for couples or solo travellers.",
+      "size_sqm": 26,
+      "beds": "1 queen bed",
+      "max_adults": 2,
+      "max_children": 1,
+      "max_occupancy": 2,
+      "extra_bed_allowed": false,
+      "base_rate": 5200,
+      "breakfast_included": false,
+      "features": ["Garden view", "Rain shower", "Smart TV", "Tea & coffee maker"]
+    },
+    {
+      "id": "deluxe-pool-view",
+      "name": "Deluxe Pool View Room",
+      "description": "Spacious room with a private balcony facing the lagoon pool.",
+      "size_sqm": 34,
+      "beds": "1 king bed or 2 twin beds",
+      "max_adults": 3,
+      "max_children": 2,
+      "max_occupancy": 3,
+      "extra_bed_allowed": true,
+      "base_rate": 7800,
+      "breakfast_included": true,
+      "features": ["Pool view balcony", "Bathtub", "Work desk", "Mini-bar"]
+    },
+    {
+      "id": "family-suite",
+      "name": "Family Suite",
+      "description": "Two-room suite with a separate living area, suited to families and small groups.",
+      "size_sqm": 55,
+      "beds": "1 king bed + 2 single beds",
+      "max_adults": 4,
+      "max_children": 2,
+      "max_occupancy": 5,
+      "extra_bed_allowed": false,
+      "base_rate": 12500,
+      "breakfast_included": true,
+      "features": ["Separate living room", "Two bathrooms", "Kitchenette", "Pool view"]
+    },
+    {
+      "id": "ocean-villa",
+      "name": "Ocean Villa",
+      "description": "Private villa with a plunge pool and direct sea view.",
+      "size_sqm": 80,
+      "beds": "1 king bed",
+      "max_adults": 2,
+      "max_children": 2,
+      "max_occupancy": 4,
+      "extra_bed_allowed": false,
+      "base_rate": 21000,
+      "breakfast_included": true,
+      "features": ["Private plunge pool", "Sea view", "Outdoor shower", "Butler service"]
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "timings.check_in_out",
+      "topic": "policies",
+      "title": "Check-in and check-out times",
+      "content": "Check-in is from 2:00 PM (14:00) and check-out is by 11:00 AM. Early check-in from 10:00 AM and late check-out until 2:00 PM are subject to availability and charged at INR 1,500 each; they can be requested at the front desk or by email but cannot be guaranteed in advance.",
+      "keywords": ["check-in", "check in", "checkin", "check-out", "check out", "checkout", "arrival", "departure", "early", "late", "time"]
+    },
+    {
+      "id": "policies.cancellation",
+      "topic": "policies",
+      "title": "Cancellation policy",
+      "content": "Standard (flexible) rates can be cancelled free of charge up to 48 hours before the check-in date. Cancellations within 48 hours of check-in, and no-shows, are charged the first night's room rate. Non-refundable promotional rates cannot be cancelled, changed or refunded. Refunds for eligible cancellations are processed to the original payment method within 7 working days.",
+      "keywords": ["cancel", "cancellation", "refund", "no-show", "no show", "change booking", "change my booking", "my booking", "my reservation", "modify"]
+    },
+    {
+      "id": "policies.payment",
+      "topic": "policies",
+      "title": "Payment and deposits",
+      "content": "We accept UPI, major credit and debit cards (Visa, Mastercard, RuPay, American Express) and cash in INR. A refundable security deposit of INR 3,000 is collected at check-in. Room rates are exclusive of GST, which is charged as per government rules.",
+      "keywords": ["payment", "pay", "card", "upi", "cash", "deposit", "gst", "tax"]
+    },
+    {
+      "id": "policies.children",
+      "topic": "policies",
+      "title": "Children policy",
+      "content": "Children of all ages are welcome. Children under 6 stay free when using existing bedding. A baby cot is available free of charge on request. Children aged 6 and above count as guests towards the room's maximum occupancy.",
+      "keywords": ["child", "children", "kid", "kids", "baby", "infant", "cot", "crib", "family"]
+    },
+    {
+      "id": "policies.extra_bed",
+      "topic": "policies",
+      "title": "Extra beds",
+      "content": "An extra bed can be added only in the Deluxe Pool View Room, for INR 1,800 per night including breakfast for the additional guest. Garden Standard Rooms, Family Suites and Ocean Villas do not accept extra beds.",
+      "keywords": ["extra bed", "rollaway", "additional bed", "extra guest", "third person"]
+    },
+    {
+      "id": "policies.pets",
+      "topic": "policies",
+      "title": "Pets",
+      "content": "Pets are not allowed on the property, with the exception of registered service animals.",
+      "keywords": ["pet", "pets", "dog", "cat", "animal"]
+    },
+    {
+      "id": "policies.smoking",
+      "topic": "policies",
+      "title": "Smoking",
+      "content": "All rooms and indoor areas are non-smoking. A designated smoking area is available near the main parking. A cleaning fee of INR 5,000 applies if smoking is detected in a room.",
+      "keywords": ["smoke", "smoking", "cigarette", "vape"]
+    },
+    {
+      "id": "policies.id",
+      "topic": "policies",
+      "title": "ID requirements",
+      "content": "All adult guests must present a valid government-issued photo ID at check-in (Aadhaar, passport, driving licence or voter ID). Foreign nationals must present a passport with a valid Indian visa. PAN cards are not accepted as ID proof.",
+      "keywords": ["id", "identity", "aadhaar", "passport", "visa", "documents", "foreigner", "couple"]
+    },
+    {
+      "id": "amenities.pool",
+      "topic": "amenities",
+      "title": "Swimming pool",
+      "content": "Yes, the resort has an outdoor lagoon swimming pool open daily from 7:00 AM to 8:00 PM, with a separate shallow children's pool. Towels are provided at the pool deck. A lifeguard is on duty from 9:00 AM to 6:00 PM. Swimwear is required in the pool.",
+      "keywords": ["pool", "swim", "swimming", "lifeguard"]
+    },
+    {
+      "id": "amenities.dining",
+      "topic": "amenities",
+      "title": "Restaurants and breakfast",
+      "content": "Breakfast is included in the rate for the Deluxe Pool View Room, Family Suite and Ocean Villa. It is not included for the Garden Standard Room, where it can be added for INR 650 per adult per day (children under 6 eat free). Breakfast is served at the Palm Leaf restaurant from 7:00 AM to 10:30 AM. The Palm Leaf serves all-day dining until 11:00 PM, and the Sunset Shack beach bar is open from 4:00 PM to midnight.",
+      "keywords": ["breakfast", "meal", "food", "restaurant", "dining", "dinner", "lunch", "bar", "eat"]
+    },
+    {
+      "id": "amenities.wifi",
+      "topic": "amenities",
+      "title": "Wi-Fi",
+      "content": "Free high-speed Wi-Fi is available in all rooms and public areas.",
+      "keywords": ["wifi", "wi-fi", "internet", "wireless"]
+    },
+    {
+      "id": "amenities.parking",
+      "topic": "amenities",
+      "title": "Parking",
+      "content": "Free on-site parking is available for guests on a first-come, first-served basis. Valet parking is not offered. There are no EV charging points at the property.",
+      "keywords": ["parking", "park", "car", "vehicle", "ev", "charging"]
+    },
+    {
+      "id": "amenities.gym_spa",
+      "topic": "amenities",
+      "title": "Gym and spa",
+      "content": "The fitness centre is open 24 hours for guests at no charge. The Tulsi Spa offers massages and Ayurvedic treatments from 9:00 AM to 9:00 PM; treatments are chargeable and advance booking is recommended.",
+      "keywords": ["gym", "fitness", "workout", "spa", "massage", "ayurveda", "ayurvedic"]
+    },
+    {
+      "id": "amenities.airport_transfer",
+      "topic": "amenities",
+      "title": "Airport transfers",
+      "content": "Paid airport transfers can be arranged with 24 hours' notice: INR 2,200 one way from Dabolim (GOI) or INR 2,800 one way from Manohar International Airport, Mopa (GOX), for up to 3 passengers per car. Candolim is about 45 minutes from Dabolim and about 50 minutes from Mopa.",
+      "keywords": ["airport", "transfer", "pickup", "pick up", "drop", "taxi", "cab", "transport", "dabolim", "mopa"]
+    },
+    {
+      "id": "location.beach_nearby",
+      "topic": "location",
+      "title": "Location and beach access",
+      "content": "The resort is a 5-minute walk from Candolim Beach. Fort Aguada is about 3 km away, and Calangute and Baga beaches are 15–20 minutes by car. The resort does not have a private beach.",
+      "keywords": ["beach", "location", "where", "nearby", "distance", "fort aguada", "calangute", "baga", "address"]
+    },
+    {
+      "id": "amenities.accessibility",
+      "topic": "amenities",
+      "title": "Accessibility",
+      "content": "Ground-floor Garden Standard and Deluxe Pool View rooms are step-free, and the restaurant and pool deck are wheelchair accessible. The Ocean Villas have steps and are not wheelchair accessible. Please mention accessibility needs when booking.",
+      "keywords": ["wheelchair", "accessible", "accessibility", "disabled", "disability", "elderly", "ramp", "lift", "elevator"]
+    },
+    {
+      "id": "contact.front_desk",
+      "topic": "contact",
+      "title": "Contacting the hotel",
+      "content": "The front desk is available 24 hours: phone +91 832 555 0142, WhatsApp +91 98220 55501, or email stay@palmgroveresort.example.",
+      "keywords": ["contact", "phone", "call", "email", "whatsapp", "reception", "front desk", "human", "staff"]
+    }
+  ]
+}

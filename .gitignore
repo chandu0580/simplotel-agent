@@ -1,0 +1,26 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node / build
+node_modules/
+dist/
+build/
+
+# Test artifacts
+test-results/
+playwright-report/
+.playwright/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
