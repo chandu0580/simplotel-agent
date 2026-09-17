@@ -446,12 +446,13 @@ describe('Landing experience and conversational routing', () => {
 
     expect(await screen.findByText('Your stay, made easier')).toBeInTheDocument()
     const actions = screen.getByRole('group', { name: 'Quick actions' })
+    // Availability leads: it is the only action that starts a search rather than a question.
     expect(within(actions).getAllByRole('button').map((b) => b.textContent)).toEqual([
-      '🛏Rooms',
-      '🍳Breakfast',
-      '🏊Amenities',
-      '📅Check availability',
-      '📋Policies',
+      'Check availability',
+      'Rooms',
+      'Breakfast',
+      'Amenities',
+      'Policies',
     ])
     expect(screen.getByRole('button', { name: 'What time is check-in?' })).toBeInTheDocument()
     expect(screen.getByLabelText('Ask a question')).toBeEnabled() // the guest can type straight away

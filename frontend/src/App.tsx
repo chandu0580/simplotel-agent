@@ -24,6 +24,8 @@ export default function App() {
   }, [])
 
   const hotelName = hotel?.hotel.name ?? DEFAULT_HOTEL_NAME
+  // Brand mark: the property's initial, skipping a leading article, so it suits any tenant.
+  const monogram = hotelName.replace(/^(the|le|la|el|hotel)\s+/i, '').charAt(0).toUpperCase()
   const today = hotel?.today ?? toISODate(new Date())
   const languages = SUPPORTED_LOCALES.filter((l) => (hotel?.hotel.languages ?? ['en']).includes(l))
   const brandStyle = hotel ? ({ '--primary': hotel.hotel.brand.primary_color } as CSSProperties) : undefined
@@ -32,30 +34,33 @@ export default function App() {
     <div className="app" style={brandStyle}>
       <main className="chat" aria-label={t('app.label', { hotel: hotelName })}>
         <header className="chat__header">
-          <div className="chat__avatar" aria-hidden="true">
-            🌴
-          </div>
+          <span className="chat__mark" aria-hidden="true">
+            {monogram}
+          </span>
           <div className="chat__title">
             <h1>{hotelName}</h1>
             <p>{t('header.purpose')}</p>
           </div>
-          {languages.length > 1 && (
-            <label className="language">
-              <span className="visually-hidden">{t('language.label')}</span>
-              <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
-                {languages.map((l) => (
-                  <option key={l} value={l}>
-                    {LOCALE_NAMES[l]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {chat.mode && (
-            <span className={`status status--${chat.mode}`} title={chat.mode === 'ai' ? t('status.aiTitle') : t('status.offlineTitle')}>
-              {chat.mode === 'ai' ? t('status.ai') : t('status.offline')}
-            </span>
-          )}
+          <div className="chat__tools">
+            {chat.mode && (
+              <span className={`status status--${chat.mode}`} title={chat.mode === 'ai' ? t('status.aiTitle') : t('status.offlineTitle')}>
+                <span className="status__dot" aria-hidden="true" />
+                {chat.mode === 'ai' ? t('status.ai') : t('status.offline')}
+              </span>
+            )}
+            {languages.length > 1 && (
+              <label className="language">
+                <span className="visually-hidden">{t('language.label')}</span>
+                <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
+                  {languages.map((l) => (
+                    <option key={l} value={l}>
+                      {LOCALE_NAMES[l]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
         </header>
 
         {!online && (

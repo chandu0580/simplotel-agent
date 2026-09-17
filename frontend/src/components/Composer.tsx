@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useI18n } from '../i18n/context'
+import { IconCalendar, IconSend } from './icons'
 
 const MAX_CHARS = 1000
 
@@ -31,10 +32,18 @@ export function Composer({ pending, onSend, onOpenBookingForm }: Props) {
 
   return (
     <form className="composer" onSubmit={submit}>
-      <button type="button" className="btn btn--secondary composer__availability" onClick={onOpenBookingForm} disabled={pending}>
-        <span aria-hidden="true">📅</span> {t('composer.checkAvailability')}
-      </button>
-      <div className="composer__row">
+      {/* One bar: the date shortcut and send sit inside the field, so the input is the widest thing on the row. */}
+      <div className="composer__bar">
+        <button
+          type="button"
+          className="icon-btn composer__availability"
+          onClick={onOpenBookingForm}
+          disabled={pending}
+          aria-label={t('composer.checkAvailability')}
+          title={t('composer.checkAvailability')}
+        >
+          <IconCalendar />
+        </button>
         <label htmlFor="composer-input" className="visually-hidden">
           {t('composer.label')}
         </label>
@@ -47,8 +56,8 @@ export function Composer({ pending, onSend, onOpenBookingForm }: Props) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
         />
-        <button type="submit" className="btn btn--primary composer__send" disabled={!canSend} aria-label={t('composer.sendLabel')}>
-          {pending ? '…' : t('composer.send')}
+        <button type="submit" className="icon-btn icon-btn--send" disabled={!canSend} aria-label={t('composer.sendLabel')}>
+          {pending ? <span className="icon-btn__spinner" aria-hidden="true" /> : <IconSend />}
         </button>
       </div>
       {text.length > MAX_CHARS * 0.8 && (

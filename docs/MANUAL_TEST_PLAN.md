@@ -50,7 +50,7 @@ AI replies are worded differently each time. Judge the **facts, reply type and b
 
 | ID | Scenario | Steps | Expected result | Actual result | PASS/FAIL | Notes |
 |---|---|---|---|---|---|---|
-| A0 | Landing screen | Open http://localhost:5173 | Property name, "Your stay, made easier", five quick actions (Rooms, Breakfast, Amenities, Check availability, Policies), four example prompts, and the message box ready to type in. **No availability form** | | | |
+| A0 | Landing screen | Open http://localhost:5173 | Property name, "Your stay, made easier", the **Check availability** action on its own line above four topic actions (Rooms, Breakfast, Amenities, Policies), four example prompts, and the message box ready to type in. **No availability form** | | | |
 | A0b | Quick action | Click **Breakfast** | The question "Is breakfast included?" is sent as if typed; the landing gives way to the conversation and a grounded answer appears | | | |
 | A0c | Small talk | Type "hi", then "how can you help me?", then "thanks" | Natural replies: a welcome, a list of what the assistant covers, and "You're welcome". **Never** "I couldn't find a reliable answer", and **no availability form** | | | |
 | A1 | Check-in time | Type "What time is check-in?" and send | Loading indicator, then an answer saying **from 2:00 PM**. A source chip (check-in/out timings) is shown | | | |
