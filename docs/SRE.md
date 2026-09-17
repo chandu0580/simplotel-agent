@@ -2,7 +2,7 @@
 
 Operational reference for the hotel guest assistant (FastAPI backend in `backend/app`, React/Vite SPA in `frontend/`). Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. Locally the backend runs as `uvicorn app.main:app --reload --port 8000` (inside a virtualenv) and the SPA as `npm run dev` (Vite dev server on :5173, proxying `/api`). For signal definitions, dashboards and alert queries see [OBSERVABILITY.md](OBSERVABILITY.md). Related: deployment topology and procedures in [DEPLOYMENT.md](DEPLOYMENT.md), every environment variable in [CONFIGURATION.md](CONFIGURATION.md), load-test method and results in [PERFORMANCE.md](PERFORMANCE.md), PMS adapter contract in [RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md), data handling in [PRIVACY.md](PRIVACY.md), and the overall evidence status in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).
 
-> **Status of numbers in this document.** No production traffic exists. The live Anthropic API is **NOT VERIFIED (no Anthropic credential)**; the default runtime provider is GLM (`LLM_PROVIDER=glm`, model `glm-5.2`), and GLM results are evidence for the GLM runtime only. Neither GitHub Actions workflow has been run on GitHub. Every SLO, alert threshold, RPO and RTO below is a **Proposed target (not measured in production)**. The measured figures are local or development measurements, not production capacity:
+> **Status of numbers in this document.** No production traffic exists. The live Anthropic API is **NOT VERIFIED (no Anthropic credential)**; the default runtime provider is GLM (`LLM_PROVIDER=glm`, model `glm-5.2`), and GLM results are evidence for the GLM runtime only. The CI workflow has run on GitHub and passed; the manual live-AI eval workflow has not been run. Every SLO, alert threshold, RPO and RTO below is a **Proposed target (not measured in production)**. The measured figures are local or development measurements, not production capacity:
 >
 > | Measurement | p50 | p95 | Context |
 > |---|---|---|---|
@@ -344,7 +344,7 @@ Log query examples use `jq` over the JSON log stream (`LOG_FORMAT=json`), where 
 
 ## 8. Release safety
 
-CI (`.github/workflows/ci.yml`, on push to main/master and PRs). **Neither workflow has been run on GitHub**; the jobs below are defined, not proven in Actions.
+CI (`.github/workflows/ci.yml`, on push to main/master and PRs). The CI workflow has run on GitHub and passed; the manual live-AI eval workflow has not been run.
 
 | Gate | Job |
 |---|---|

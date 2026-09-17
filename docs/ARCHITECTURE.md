@@ -138,5 +138,5 @@ Details: [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Optional adapters:** Redis (`STATE_BACKEND=redis`) and PostgreSQL (`DATABASE_URL`: migrations, row-level security with a non-superuser application role, audit sink, retention). Their integration tests (`backend/tests/integration`) skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` point at running services; they were verified locally once and are not run in CI.
 - **CI:** `.github/workflows/ci.yml` has four jobs: backend (lint, tests, offline eval gate, dependency audit), security (secret scan, no committed `.env`), frontend (lint, build, tests, bundle secret scan, audit) and e2e (Playwright). Standard CI needs no LLM secret and no Docker.
 - **Live AI eval:** `.github/workflows/live-ai-eval.yml` is a manual, secret-gated workflow (provider `glm` or `anthropic`) for evaluating against a live model.
-- **Neither workflow has been run on GitHub.**
+- **CI has run on GitHub and passed** ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)). The manual live-AI eval workflow has not been run.
 - Nothing here is production-ready; see [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md).

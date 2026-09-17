@@ -30,7 +30,7 @@ human pass before submission.
 | Evaluation | PASS | Offline development 36/36 (critical 16/16) and holdout 12/12, both with no regressions against the committed baselines; live GLM development 42/42 and holdout 12/12 | Live runs are GLM, not Claude |
 | Tests | PASS | Backend 464 passed / 22 skipped (optional Redis + PostgreSQL), frontend 30, e2e 14, ruff and oxlint clean, `tsc -b` clean | Optional service tests need Redis/PostgreSQL |
 | Documentation | PASS | Every relative link in README and docs resolves (checked programmatically); stale evaluation figures refreshed; implemented / tested / designed / not verified labelled throughout | - |
-| CI | NOT VERIFIED | Configuration is valid and every step was run locally (ruff, pytest, offline eval baseline gate, secret scans, oxlint, build, vitest, playwright, pip-audit, npm audit) | GitHub Actions has never executed: no remote |
+| CI | PASS | Every step was run locally, and the workflow then **ran on GitHub and passed** on commits `825b18c` and `0e85e32` ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)) | The manual live-AI eval workflow has not been run (it needs a provider credential) |
 | Performance | PARTIAL | Local load test and in-process benchmark recorded in [PERFORMANCE.md](PERFORMANCE.md), with the mock provider; live GLM latency p50 about 2.6 s per scenario | No production capacity test; not Anthropic latency |
 | Git | PASS | Branch `master`, working tree clean, no remote, nothing pushed; no `.env`, build output, virtualenv or temporary files tracked | Add a remote and push at submission |
 | Submission package | PASS | README, frontend, backend, tests, evals, docs, configuration and `.gitignore` present; clean-venv install verified | Manual test pass, then push |
@@ -112,4 +112,4 @@ human pass before submission.
 - [x] **Git clean.** Working tree clean after commit `e4ec2d1` (fix: four defects found by a live scenario sweep); no remote; nothing pushed.
 - [x] **No generated files tracked.** No `dist/`, `node_modules`, `.venv`, `__pycache__`, test results or probe scripts are tracked.
 - [x] **No credentials.** See Security.
-- [ ] **CI.** Configuration validated locally: YAML parses, and every step's command was run locally. **GitHub execution: NOT RUN** (no remote).
+- [x] **CI.** Every step's command was run locally, and GitHub Actions then ran the workflow twice and passed ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)). The manual live-AI eval workflow has not been run.

@@ -274,7 +274,7 @@ CI runs the offline development suite with `--baseline evals/results/offline.jso
 - **`ci.yml`** (backend job): `python -m evals.run_evals --mode offline --label ci-offline --baseline evals/results/offline.json`. No LLM secret is needed.
 - **`live-ai-eval.yml`**: manual `workflow_dispatch` with inputs `provider` (`glm` or `anthropic`), optional `model` and `gate`. Secrets (`LLM_API_KEY`, `LLM_BASE_URL` for GLM; `ANTHROPIC_API_KEY` for Anthropic) come from the protected `ai-evaluation` environment, and only the selected provider's secrets are passed. Inputs arrive through environment variables and are sanitised before use. With `gate` on and a committed `evals/results/live-<provider>-baseline.json`, the baseline gate applies. Results are uploaded as artifacts and labelled with the provider.
 
-**Neither workflow has been run on GitHub.**
+**CI has run on GitHub and passed** ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)); the manual live-AI eval workflow has not been run.
 
 ### Local performance
 

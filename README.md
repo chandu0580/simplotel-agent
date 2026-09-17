@@ -75,7 +75,7 @@ was added later.
 | **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
 | **GLM (default provider)** | Development suite **42/42** and holdout suite **12/12** on the current code (`backend/evals/results/glm-rev10`), plus offline runs of both suites. This is evidence for the GLM runtime only, **not** Claude verification. |
-| **CI** | Workflows are defined; **neither has been run on GitHub**. |
+| **CI** | The CI workflow (backend, security, frontend, e2e) **ran on GitHub and passed** on commits `825b18c` and `0e85e32` ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)). The manual live-AI eval workflow has not been run. |
 
 Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
 
@@ -339,7 +339,7 @@ Totals from the latest run: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READI
 - **`.github/workflows/ci.yml`** needs no LLM secret and no Docker. Four jobs: backend (ruff, pytest, offline eval gate, pip-audit); security (secret scan of tracked files, no committed `.env`); frontend (oxlint, type check and build, Vitest, bundle secret scan, npm audit); e2e (Playwright against the real backend and frontend, AI disabled). The optional Redis/PostgreSQL integration tests skip in CI.
 - **`.github/workflows/live-ai-eval.yml`** is manual (`workflow_dispatch`): provider `glm` or `anthropic`, secrets from the protected `ai-evaluation` environment, inputs sanitised, optional baseline gate, results uploaded as artifacts.
 
-**Neither workflow has been run on GitHub.**
+**CI has run on GitHub and passed** ([latest run](https://github.com/chandu0580/simplotel-agent/actions/runs/35250674547)); the manual live-AI eval workflow has not been run.
 
 ## Evaluation
 
