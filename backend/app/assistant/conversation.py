@@ -67,7 +67,8 @@ _CONFIRM = re.compile(
 _GREETING = re.compile(r"^(hi+|hey+|hello+|hola|yo|namaste|namaskar|greetings|good\s+(morning|afternoon|evening|day))\b", re.I)
 _CAPABILITY = re.compile(
     r"\b(how\s+(can|could|do)\s+you\s+help|what\s+(can|could)\s+you\s+(do|help)|what\s+can\s+i\s+ask|what\s+do\s+you\s+(do|help|know)|"
-    r"what\s+(kind\s+of\s+)?(information|info)\s+do\s+you\s+have|can\s+you\s+help(\s+me)?|tell\s+me\s+what\s+you\s+can\s+do|"
+    r"what\s+(kind\s+of\s+)?(information|info)\s+(do\s+you\s+have|can\s+you\s+(provide|give|share|offer))|"
+    r"what\s+else\s+can\s+you\s+(do|tell\s+me)|can\s+you\s+help(\s+me)?|tell\s+me\s+what\s+you\s+can\s+do|"
     r"how\s+do\s+you\s+work|what\s+is\s+this)\b",
     re.I,
 )

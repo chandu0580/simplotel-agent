@@ -14,7 +14,7 @@ The project began as a take-home assignment for Simplotel and has since been evo
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
 | **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
-| **GLM (default provider)** | Development suite **42/42** and holdout suite **12/12** on the current code (`backend/evals/results/glm-rev8`), plus offline runs of both suites. This is evidence for the GLM runtime only, **not** Claude verification. |
+| **GLM (default provider)** | Development suite **42/42** and holdout suite **12/12** on the current code (`backend/evals/results/glm-rev10`), plus offline runs of both suites. This is evidence for the GLM runtime only, **not** Claude verification. |
 | **CI** | Workflows are defined; **neither has been run on GitHub**. |
 
 Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
@@ -287,7 +287,7 @@ Two suites. The **development** suite (34 scenarios: functional, grounding, tool
 |---|---|
 | Offline, development suite | 36/36 (6 AI-only skipped); critical 16/16; no regressions vs baseline |
 | Offline, holdout suite | 12/12; critical 10/10 |
-| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | **42/42** on the current code (`glm-rev8`: critical 16/16, decision accuracy 17/17, p50 2560 ms). Earlier runs on smaller versions of the suite: 34/34 three times |
+| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | **42/42** on the current code (`glm-rev10`: critical 16/16, decision accuracy 17/17, p50 2525 ms). Earlier runs on smaller versions of the suite: 34/34 three times |
 | GLM `glm-5.2`, GLM-native adapter, holdout suite (**GLM runtime only, not Claude**) | 12/12; critical 10/10; served by AI 12/12 |
 | Anthropic live | **NOT VERIFIED — no Anthropic credential** |
 
@@ -375,3 +375,4 @@ Migration path and scaling stages: [docs/ENTERPRISE_ARCHITECTURE.md](docs/ENTERP
 - **Claude Code** (Anthropic's coding agent, running Claude Opus 5): design, implementation, tests, reviews and documentation, including parallel sub-agents that drafted documents from the code. Every result quoted in this repository comes from commands that were actually run.
 - **GLM (`glm-5.2`):** the default runtime provider, called through the GLM-native adapter (OpenAI-compatible protocol). Earlier development runs used an Anthropic-compatible gateway. GLM results are GLM-runtime evidence only, not Claude verification.
 - **Claude API (`claude-opus-5`):** supported through the alternative Anthropic adapter (`LLM_PROVIDER=anthropic`). Not exercised live.
+- **How they were used:** the agent drafted code, tests and documentation; every figure quoted in this repository comes from a command that was actually run (test suites, evaluation runs, live scenario sweeps against the running application), and behaviour was checked against the running app rather than assumed. The trade-offs behind each decision are written up in [DECISIONS.md](docs/DECISIONS.md), and anything unverified is labelled as such.

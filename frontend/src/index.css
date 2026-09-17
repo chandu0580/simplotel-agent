@@ -1047,6 +1047,12 @@ a:focus-visible,
     display: none;
   }
 
+  /* Comfortable touch target for the language picker on a phone. */
+  .language select {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+
   .messages {
     padding: 18px var(--gutter) 22px;
     gap: 14px;

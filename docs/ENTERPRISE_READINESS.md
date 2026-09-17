@@ -19,7 +19,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 
 | Capability | Status | Evidence | Remaining gap |
 |---|---|---|---|
-| GLM runtime provider (default) | IMPLEMENTED + TESTED | `app/llm/glm_provider.py`: forced tool call, typed errors, retry policy, HTTPS required in production. Contract tests with mocked transport; real slow-server timeout test. Live GLM 5.2: development suite 42/42 (`glm-rev8`; earlier 34/34 runs on smaller versions of the suite), holdout 12/12 | Production GLM endpoint not chosen; provider SLA, quota and data terms not assessed |
+| GLM runtime provider (default) | IMPLEMENTED + TESTED | `app/llm/glm_provider.py`: forced tool call, typed errors, retry policy, HTTPS required in production. Contract tests with mocked transport; real slow-server timeout test. Live GLM 5.2: development suite 42/42 (`glm-rev10`; earlier 34/34 runs on smaller versions of the suite), holdout 12/12 | Production GLM endpoint not chosen; provider SLA, quota and data terms not assessed |
 | Anthropic provider (alternative) | IMPLEMENTED + NOT VERIFIED | Adapter tested with the real SDK against a mocked HTTP transport; provider-neutral contract and failure tests | **Live verification: NOT VERIFIED — no Anthropic credential** |
 | Provider-neutral contract | IMPLEMENTED + TESTED | `tests/test_contracts.py`: tool calls, no tools on `generate`, and timeout / 503 / plain-text output → identical fallback and public code across anthropic, glm and scripted providers (9 cases) | — |
 | Multi-tenancy (application) | IMPLEMENTED + TESTED | Tenant-scoped repositories and keys; cross-hotel 404s (`test_tenancy.py`); cross-tenant read on another replica → 404; holdout `holdout-cross-tenant-facts` (offline and GLM) | Persistent tenant registry; tenant admin API |
@@ -61,13 +61,13 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Check | Result |
 |---|---|
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
-| Backend pytest without services (CI `backend` job equivalent) | **460 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
+| Backend pytest without services (CI `backend` job equivalent) | **464 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
 | Frontend Vitest | **30 passed** (landing page and conversation) |
 | Playwright E2E (desktop + mobile, AI disabled) | **14 passed** |
 | Offline eval, development suite | **36/36** (6 AI-only skipped; 42 scenarios incl. 6 conversational), critical 16/16, no regressions vs baseline |
 | Offline eval, holdout suite | **12/12**, critical 10/10 |
-| GLM 5.2 live, development suite (runtime evidence, not Claude) | **42/42**, critical 16/16, decision accuracy 17/17, groundedness 13/13, p50 2.6 s (`evals/results/glm-rev8`) |
+| GLM 5.2 live, development suite (runtime evidence, not Claude) | **42/42**, critical 16/16, decision accuracy 17/17, groundedness 13/13, p50 2.5 s (`evals/results/glm-rev10`) |
 | GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/holdout-ai`) |
 | Load test (local, not capacity) | 0% errors at 10–100 users in all scenarios; see [PERFORMANCE.md](PERFORMANCE.md) |
 | Secret scans | 0 findings: tracked files, frontend bundle |

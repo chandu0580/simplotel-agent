@@ -46,6 +46,19 @@ AI replies are worded differently each time. Judge the **facts, reply type and b
 | Inventory | Fully booked 24–25 Dec 2026 and 31 Dec 2026; Ocean Villa sold out Fri/Sat; Family Suite sold out Saturdays; peak-season prices 15 Dec–5 Jan |
 | Search limits | Up to 30 nights; up to 10 adults and 6 children in the form; dates in the past rejected |
 
+## Where to find each area
+
+| Area to cover | Section | Cases |
+|---|---|---|
+| Landing (loads, quick actions, entry to the assistant, responsive) | A | L1-L7 |
+| Conversation (greeting, capability, hotel question, follow-up, contextual reference) | B, E | B0-B0g, B1-B6, E16-E20b |
+| Availability (valid, missing dates, invalid dates, guest count, fully booked, room result) | D | D10-D15 |
+| Failure (backend unavailable, retry, model unavailable, tool failure, rate limit) | F | F20-F24 |
+| Security (injection, prompt extraction, secret extraction, cross-tenant, unauthorized tool) | G | G25-G29b |
+| UX (desktop, mobile, keyboard, long message, loading, error) | H | H30-H37 |
+
+Nothing in this plan is ticked: these are the cases to execute by hand before submission.
+
 ## A. Landing page
 
 The landing page is what `/` shows; the conversation lives at `/#chat`, so the browser's back button

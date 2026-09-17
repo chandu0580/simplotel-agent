@@ -105,7 +105,7 @@ At runtime every AI trace separates the latency sources (`AITrace`, see [OBSERVA
 
 These fields also feed the histograms `turn_latency_ms{mode}`, `app_latency_ms{mode}` and `retrieval_latency_ms`. A test checks that total ≈ llm + tools + app to within 1 ms.
 
-For comparison, measured live-model latency (GLM 5.2, the development suite through the GLM adapter) was p50 about 5.5 s and p95 12.6–14.3 s per scenario in the two adapter runs, and p50 3.7 s / p95 10.1 s in the final run on the final code ([EVALUATION.md](EVALUATION.md)). The model dominates end-to-end latency; application overhead is milliseconds.
+For comparison, measured live-model latency (GLM 5.2, the development suite through the GLM adapter) is p50 about 2.6 s per scenario on the current code, after the brevity rules shortened answers; earlier runs measured p50 5.5 s / p95 12.6-14.3 s and p50 3.7 s / p95 10.1 s ([EVALUATION.md](EVALUATION.md)). These are GLM figures measured from this laptop, not Anthropic figures and not production figures. The model dominates end-to-end latency; application overhead is milliseconds.
 
 ## Not measured
 

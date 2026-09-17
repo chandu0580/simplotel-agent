@@ -7,7 +7,7 @@ Kinds of evidence, kept separate:
 | **A. Automated tests** (pytest, Vitest, Playwright; integration tests against real Redis and PostgreSQL) | Business rules, tenancy isolation, tool authorization, resilience, guardrails, shared state, RLS, error model, API contract, UI states, integrated browser → frontend → backend flow | **No** (model faked or HTTP-mocked) | Unit, contract, API, UI and E2E tests passing. The Redis/PostgreSQL integration tests pass when those optional services are provided (292 passed, run locally once) and are skipped otherwise; they are not run in CI. Totals in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md) |
 | **B. Offline evaluation** (`evals/run_evals.py --mode offline`) | Deterministic engine plus full turn pipeline on realistic scenarios; regression and critical-scenario gates | **No** | Development suite 28/28 (6 AI-only skipped), critical 14/14; holdout suite 12/12, critical 10/10 |
 | **C. Anthropic Claude live evaluation** | How Claude actually behaves | **Yes** | **NOT VERIFIED — no Anthropic credential** |
-| **D. GLM runtime evaluation** (`--mode ai` with `LLM_PROVIDER=glm`, model `glm-5.2`) | The default runtime provider end to end through the real application code path | **No** (GLM, not Claude) | Current code: development suite **42/42**, critical 16/16 (`glm-rev8`); holdout suite 12/12, critical 10/10. Run history for earlier versions of the suite is in section D below |
+| **D. GLM runtime evaluation** (`--mode ai` with `LLM_PROVIDER=glm`, model `glm-5.2`) | The default runtime provider end to end through the real application code path | **No** (GLM, not Claude) | Current code: development suite **42/42**, critical 16/16 (`glm-rev10`); holdout suite 12/12, critical 10/10. Run history for earlier versions of the suite is in section D below |
 
 > **Nothing in this repository has been verified against the live Anthropic Claude API.** Section D is evidence for the GLM runtime only. It is not Claude verification.
 
@@ -200,6 +200,26 @@ text. Revision 8 asks the model to decline in one sentence and hand over to the 
 Live GLM 5.2 after the fixes: development **42/42**, critical 16/16, decision accuracy 17/17,
 groundedness 13/13, p50 2560 ms (`evals/results/glm-rev8.md`); holdout **12/12**, critical 10/10.
 Offline: development 36/36, holdout 12/12.
+
+#### Final submission audit (prompt revision 10)
+
+The submission audit re-ran the scripted guest journey and found one more defect: **"What information can
+you provide?"** - a question about the assistant's own scope - was escalated to the front desk, because the
+deterministic fast path covered "what information do you have" but not that phrasing, and the model's uncited
+reply then hit the uncited-answer guardrail. Fixed by widening that phrase list and by extending the prompt
+rule so questions about the assistant itself are clarifications.
+
+The audit also caught a rule conflict introduced at revision 8. "Please book a room from X to Y" matched the
+new "decline what you cannot do" rule and became a refusal, losing the deterministic past-date validation
+message; the live eval's `availability-past-date` scenario flagged it as a regression against `glm-rev8`.
+Revision 10 states that a request to book specific dates is still an availability request, and that only the
+part the assistant cannot do - completing the booking - is declined. The three booking-related scenarios then
+passed four runs in a row.
+
+Live GLM 5.2 at revision 10: development **42/42**, critical 16/16, decision accuracy 17/17, groundedness
+13/13, p50 2525 ms, **no regressions** against `glm-rev8` (`evals/results/glm-rev10.md`); holdout **12/12**,
+critical 10/10, no regressions against `holdout-ai`. Offline: development 36/36, holdout 12/12, both with no
+regressions against their committed baselines.
 
 ## E. Holdout suite
 

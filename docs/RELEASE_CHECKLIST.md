@@ -6,10 +6,39 @@ landing page, the UI redesign and the live scenario sweep; every command below w
 - `[x]` verified by a command or test run during the audit (evidence given).
 - `[ ]` not yet verified, or needs the human manual test pass ([MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md)).
 
+## Acceptance matrix
+
+Statuses: PASS (verified by a command or run recorded here) · PARTIAL · FAIL · NOT VERIFIED · N/A.
+Manual cases in [MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md) are deliberately unticked: they are for the
+human pass before submission.
+
+| Area | Status | Evidence | Remaining |
+|---|---|---|---|
+| Assignment requirements | PASS | Requirement-by-requirement audit in [ASSIGNMENT_SCOPE.md](ASSIGNMENT_SCOPE.md); guest UI, question API, knowledge base, availability tool, conversation context, fallback, validation, errors, logging and automated tests all implemented | Optional deployment/demo not done (allowed: GitHub repo is the deliverable) |
+| Frontend | PASS | Landing page and conversation; `npm test` 30 passed, `npx playwright test` 14 passed (desktop + mobile), `npm run build` clean; browser probe at 390/412/768/1280/1920 px found no horizontal overflow and no internals (provider, trace id, prompt version) in guest-visible text | Manual UX pass H30-H37 |
+| Backend | PASS | `python -m pytest` 464 passed, 22 skipped; API v1 with structured errors; clean-venv install from `requirements.txt` started the app and served a live turn | Manual failure pass F20-F24 |
+| AI | PASS | One model call per turn, three strict tools; degradation verified live with an unreachable endpoint: HTTP 200, offline answers, `meta.degradation=LLM_TIMEOUT`, honest guest notice | Anthropic not live-verified (no credential) |
+| Conversation | PASS | Live scripted journey (greeting to goodbye) reads naturally; deterministic fast paths stay small and the model owns the rest | Manual B0-B6 |
+| Knowledge grounding | PASS | Live checks of check-in, check-out, breakfast, pool, amenities, capacity, cancellation, ID, extra bed: every answer cited knowledge entries; draft content (Skyline rooftop bar) never served; unknown facts escalated | Manual B1-B6, C7-C9b |
+| Availability | PASS | Live edge cases: check-out before check-in 422, zero/negative/excessive adults 422, past dates 422, fully booked 200 `available=false`, valid search returns rooms with capacity, price and rooms left from deterministic code | Manual D10-D15 |
+| Tools | PASS | `pytest -k "tenant or isolation or idempot or concurrent or authoriz or booking_tool"` 31 passed, 11 skipped: validation, authorization, tenant context, timeout, audit, idempotency under 2/5/10 concurrent duplicates, confirmation for mutation | Manual E-series security cases |
+| Follow-ups | PASS | Live context script: "it", "the deluxe one", "next weekend", "one more night" and "that room's price" all resolved correctly, prices matching the search | Manual E16-E20b |
+| Guardrails | PASS | Uncited answers, fabricated prices, inventory claims, secret and prompt leakage blocked; a published figure the answer forgot to cite is now cited rather than discarded (`price_source_added`) | - |
+| Security | PASS | Live injection sweep (instruction override, prompt extraction, fake discount, booking without authorization, card details) all refused; secret scan of 156 tracked files and the built bundle: 0 findings | Manual G25-G29b |
+| Tenant isolation | PASS | Cross-tenant reads, writes, deletes and availability return 404; admin token of one tenant gets 403 on another (test suite above) | - |
+| API | PASS | Single error envelope verified for 404/405/409/413/422/429/500/503; OpenAPI snapshot contract test passes; frontend calls v1 only and validates responses | - |
+| Evaluation | PASS | Offline development 36/36 (critical 16/16) and holdout 12/12, both with no regressions against the committed baselines; live GLM development 42/42 and holdout 12/12 | Live runs are GLM, not Claude |
+| Tests | PASS | Backend 464 passed / 22 skipped (optional Redis + PostgreSQL), frontend 30, e2e 14, ruff and oxlint clean, `tsc -b` clean | Optional service tests need Redis/PostgreSQL |
+| Documentation | PASS | Every relative link in README and docs resolves (checked programmatically); stale evaluation figures refreshed; implemented / tested / designed / not verified labelled throughout | - |
+| CI | NOT VERIFIED | Configuration is valid and every step was run locally (ruff, pytest, offline eval baseline gate, secret scans, oxlint, build, vitest, playwright, pip-audit, npm audit) | GitHub Actions has never executed: no remote |
+| Performance | PARTIAL | Local load test and in-process benchmark recorded in [PERFORMANCE.md](PERFORMANCE.md), with the mock provider; live GLM latency p50 about 2.6 s per scenario | No production capacity test; not Anthropic latency |
+| Git | PASS | Branch `master`, working tree clean, no remote, nothing pushed; no `.env`, build output, virtualenv or temporary files tracked | Add a remote and push at submission |
+| Submission package | PASS | README, frontend, backend, tests, evals, docs, configuration and `.gitignore` present; clean-venv install verified | Manual test pass, then push |
+
 ## Code
 
 - [x] **Tests pass.**
-  - Backend `python -m pytest`: 460 passed, 22 skipped. The skipped tests are the optional Redis/PostgreSQL integration tests.
+  - Backend `python -m pytest`: 464 passed, 22 skipped. The skipped tests are the optional Redis/PostgreSQL integration tests.
   - Frontend `npm test`: 30 passed (landing page and conversation).
   - Playwright `npm run test:e2e`: 14 passed (desktop + mobile, AI disabled).
 - [x] **Lint passes.** `ruff check app tests evals scripts perf` and `npx oxlint src e2e` are clean.

@@ -24,7 +24,8 @@ BASE = f"/api/v1/hotels/{GOA}"
 
 GREETINGS = ["hi", "Hi!", "hello", "Hello there", "hey", "good morning", "Good evening!", "namaste", "hi 👋"]
 CAPABILITY = ["how can you help me?", "What can you do?", "what can I ask you?", "What do you help with?",
-              "what information do you have?", "Can you help me?", "Tell me what you can do.", "how do you work?"]
+              "what information do you have?", "What information can you provide?", "what else can you tell me?",
+              "Can you help me?", "Tell me what you can do.", "how do you work?"]
 THANKS = ["thanks", "Thank you!", "thx", "great", "perfect", "okay", "ok", "got it", "that's helpful"]
 GOODBYE = ["bye", "Goodbye!", "see you", "take care", "good night"]
 # Pleasantries, split by what the guest actually asked: one canned reply for all of them answered
@@ -57,6 +58,8 @@ HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you h
     *[(m, None) for m in UNKNOWN_HOTEL_FACTS],
     *[(m, None) for m in HOTEL_QUESTIONS],
     ("do you have rooms available?", None),
+    ("what amenities can you provide?", None),  # a hotel question, not a question about the assistant
+    ("can you provide an extra bed?", None),
     ("what is the weather in Goa?", "off_topic"),  # not a hotel question: declined, never escalated
     ("", None),
 ])
