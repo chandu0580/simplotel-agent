@@ -1,5 +1,6 @@
 import type { ComponentType, SVGProps } from 'react'
 import type { HotelInfo } from '../api/types'
+import { monogram } from '../format'
 import { useI18n } from '../i18n/context'
 import type { MessageKey } from '../i18n/messages'
 import { IconBed, IconBreakfast, IconCalendar, IconPolicy, IconPool } from './icons'
@@ -37,6 +38,9 @@ export function Landing({ hotel, onAsk, onOpenBookingForm }: Props) {
   return (
     <section className="landing" aria-labelledby="landing-title">
       <div className="landing__inner">
+        <span className="landing__emblem" aria-hidden="true">
+          {monogram(hotel?.hotel.name ?? t('header.fallbackTagline'))}
+        </span>
         <p className="landing__eyebrow">{hotel?.hotel.name ?? t('header.fallbackTagline')}</p>
         <h2 id="landing-title" className="landing__title">
           {t('landing.title')}

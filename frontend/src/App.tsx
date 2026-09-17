@@ -4,7 +4,7 @@ import type { HotelInfo } from './api/types'
 import { Composer } from './components/Composer'
 import { Landing } from './components/Landing'
 import { MessageList } from './components/MessageList'
-import { formatShortDate, partyLabel, toISODate } from './format'
+import { formatShortDate, monogram, partyLabel, toISODate } from './format'
 import { useChat } from './hooks/useChat'
 import { useOnlineStatus } from './hooks/useOnlineStatus'
 import { useI18n } from './i18n/context'
@@ -24,8 +24,6 @@ export default function App() {
   }, [])
 
   const hotelName = hotel?.hotel.name ?? DEFAULT_HOTEL_NAME
-  // Brand mark: the property's initial, skipping a leading article, so it suits any tenant.
-  const monogram = hotelName.replace(/^(the|le|la|el|hotel)\s+/i, '').charAt(0).toUpperCase()
   const today = hotel?.today ?? toISODate(new Date())
   const languages = SUPPORTED_LOCALES.filter((l) => (hotel?.hotel.languages ?? ['en']).includes(l))
   const brandStyle = hotel ? ({ '--primary': hotel.hotel.brand.primary_color } as CSSProperties) : undefined
@@ -35,7 +33,7 @@ export default function App() {
       <main className="chat" aria-label={t('app.label', { hotel: hotelName })}>
         <header className="chat__header">
           <span className="chat__mark" aria-hidden="true">
-            {monogram}
+            {monogram(hotelName)}
           </span>
           <div className="chat__title">
             <h1>{hotelName}</h1>

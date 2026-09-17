@@ -1,47 +1,54 @@
 /*
- * Guest assistant UI.
+ * Guest assistant UI: a welcome screen and a conversation, nothing else.
  *
- * One panel, three zones: header (who you are talking to), conversation, composer. Everything else
- * is a card inside the conversation. The palette is warm neutral so the tenant's brand colour, the
- * only strong colour on the page, always reads as the brand: it arrives at runtime as `--primary`
- * (set on `.app` from the hotel profile) and every accent is derived from it with `color-mix`.
+ * The page is full-bleed rather than a card floating in the viewport: the top bar, the conversation
+ * and the composer each span the window, and their *contents* are centred on one column
+ * (`--page`). That keeps long lines readable on a desktop without leaving the screen half empty.
+ *
+ * Colour: warm sand neutrals, a soft tinted wash at the top of the page, and the tenant's own
+ * colour (`--primary`, set on `.app` from the hotel profile) as the single strong accent. Every
+ * other accent is mixed from it, so a tenant's brand recolours the whole interface coherently.
  */
 
 :root {
-  /* Surfaces: warm neutrals, never pure grey, so the brand green sits comfortably on them. */
-  --bg: #f1efea;
-  --surface: #ffffff;
-  --surface-muted: #faf9f7;
-  --surface-sunken: #f5f3ef;
-  --border: #e7e3dc;
-  --border-strong: #d9d3c9;
+  --page: 880px;
 
-  --text: #1a2422;
-  --text-muted: #6a746f;
-  --text-subtle: #8c948f;
+  /* Warm neutrals: a resort palette, not office grey. */
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --surface-muted: #fdfcfa;
+  --surface-sunken: #f4f1ea;
+  --border: #e6e1d6;
+  --border-strong: #d6cfc0;
+
+  --text: #16211d;
+  --text-muted: #63706a;
+  --text-subtle: #8b968f;
 
   /* Overridden per tenant from the hotel profile. */
   --primary: #0f5d4e;
-  --primary-hover: color-mix(in srgb, var(--primary) 85%, #000);
-  --primary-soft: color-mix(in srgb, var(--primary) 10%, #fff);
+  --primary-hover: color-mix(in srgb, var(--primary) 84%, #000);
+  --primary-deep: color-mix(in srgb, var(--primary) 74%, #000);
+  --primary-soft: color-mix(in srgb, var(--primary) 11%, #fff);
   --primary-softer: color-mix(in srgb, var(--primary) 6%, #fff);
-  --primary-ring: color-mix(in srgb, var(--primary) 28%, transparent);
+  --primary-ring: color-mix(in srgb, var(--primary) 26%, transparent);
 
-  --accent: #c26a3f;
-  --warn-bg: #fdf3e5;
+  --accent: #c8703f;
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, #fff);
+  --warn-bg: #fdf2e3;
   --warn-text: #8a5313;
-  --error-bg: #fdefec;
+  --error-bg: #fdeeeb;
   --error-text: #99301f;
-  --error-border: #f3cec6;
+  --error-border: #f2cdc5;
 
   --radius-sm: 10px;
   --radius: 14px;
   --radius-lg: 20px;
-  --radius-xl: 26px;
+  --radius-xl: 28px;
 
-  --shadow-xs: 0 1px 2px rgba(26, 36, 34, 0.05);
-  --shadow-sm: 0 2px 8px rgba(26, 36, 34, 0.06);
-  --shadow-lg: 0 24px 60px -24px rgba(26, 36, 34, 0.28);
+  --shadow-xs: 0 1px 2px rgba(22, 33, 29, 0.05);
+  --shadow-sm: 0 4px 14px -6px rgba(22, 33, 29, 0.16);
+  --shadow-md: 0 14px 34px -18px rgba(22, 33, 29, 0.35);
 
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 16px;
@@ -61,9 +68,7 @@
 body {
   margin: 0;
   min-height: 100dvh;
-  background:
-    radial-gradient(90rem 40rem at 50% -10%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 60%),
-    var(--bg);
+  background: var(--bg);
 }
 
 button,
@@ -100,37 +105,37 @@ p {
   color: var(--text-muted);
 }
 
-/* ---------- Layout ---------- */
+/* ---------- Page shell ---------- */
 
+/* Full-bleed bands; `--gutter` centres each band's content on the same column. */
 .app {
+  --gutter: max(20px, calc((100% - var(--page)) / 2));
   display: flex;
-  justify-content: center;
-  padding: 28px 16px;
   height: 100dvh;
+  background:
+    radial-gradient(52rem 28rem at 88% 4%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 66%),
+    radial-gradient(60rem 34rem at 8% 0%, color-mix(in srgb, var(--primary) 20%, transparent), transparent 64%),
+    linear-gradient(180deg, color-mix(in srgb, var(--primary) 11%, #fff), color-mix(in srgb, var(--primary) 3%, var(--bg)) 46%, var(--bg));
 }
 
 .chat {
   display: flex;
   flex-direction: column;
-  width: 100%;
-  max-width: 820px;
-  height: 100%;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
-/* ---------- Header ---------- */
+/* ---------- Top bar ---------- */
 
 .chat__header {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 18px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  padding: 14px var(--gutter);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .chat__mark {
@@ -139,12 +144,13 @@ p {
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  border-radius: 12px;
-  background: var(--primary-soft);
-  color: var(--primary);
+  border-radius: 13px;
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
+  color: #fff;
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+  box-shadow: var(--shadow-sm);
 }
 
 .chat__title {
@@ -182,12 +188,12 @@ p {
   gap: 6px;
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
-  padding: 5px 10px;
+  padding: 5px 11px;
   border-radius: 999px;
   white-space: nowrap;
-  background: var(--surface-sunken);
+  background: var(--surface);
   color: var(--text-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .status__dot {
@@ -200,39 +206,41 @@ p {
 .status--ai {
   background: var(--primary-soft);
   color: var(--primary);
+  box-shadow: none;
 }
 
 .status--offline {
   background: var(--warn-bg);
   color: var(--warn-text);
+  box-shadow: none;
 }
 
 .language select {
   appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--border);
+  background-color: var(--surface);
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 5px 26px 5px 12px;
+  padding: 6px 26px 6px 12px;
   font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 14px) 52%, calc(100% - 10px) 52%;
+  background-position: calc(100% - 14px) 53%, calc(100% - 10px) 53%;
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
 }
 
 .language select:hover {
-  border-color: var(--border-strong);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .connection-banner {
-  padding: 8px 18px;
+  padding: 8px var(--gutter);
   font-size: 0.82rem;
   background: var(--warn-bg);
   color: var(--warn-text);
-  border-bottom: 1px solid var(--border);
 }
 
 /* ---------- Conversation ---------- */
@@ -241,11 +249,10 @@ p {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 22px 20px 26px;
+  padding: 26px var(--gutter) 30px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  background: var(--surface-muted);
+  gap: 18px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -262,8 +269,8 @@ p {
 }
 
 .bubble {
-  max-width: min(86%, 600px);
-  padding: 12px 16px;
+  max-width: min(88%, 640px);
+  padding: 13px 17px;
   border-radius: var(--radius-lg);
   font-size: 0.95rem;
   overflow-wrap: anywhere;
@@ -271,18 +278,17 @@ p {
 }
 
 .bubble--user {
-  background: var(--primary);
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
   color: #fff;
-  border-bottom-right-radius: 7px;
+  border-bottom-right-radius: 8px;
   white-space: pre-wrap;
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-sm);
 }
 
 .bubble--assistant {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 7px;
-  box-shadow: var(--shadow-xs);
+  border-bottom-left-radius: 8px;
+  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -290,7 +296,7 @@ p {
 
 .bubble--assistant:has(.availability),
 .bubble--assistant:has(.booking-form) {
-  width: min(100%, 600px);
+  width: min(100%, 640px);
 }
 
 .bubble__text {
@@ -298,13 +304,14 @@ p {
 }
 
 .bubble--fallback {
-  border-left: 3px solid var(--accent);
+  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border), inset 3px 0 0 var(--accent);
+  padding-left: 20px;
 }
 
 .bubble--error {
   background: var(--error-bg);
   color: var(--error-text);
-  border: 1px solid var(--error-border);
+  box-shadow: inset 0 0 0 1px var(--error-border);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -406,14 +413,14 @@ p {
   font-size: 0.83rem;
   font-weight: 600;
   text-decoration: none;
-  padding: 6px 14px;
+  padding: 7px 15px;
   border-radius: 999px;
   background: var(--primary-soft);
   transition: background 0.15s ease;
 }
 
 .contact-links a:hover {
-  background: color-mix(in srgb, var(--primary) 16%, #fff);
+  background: color-mix(in srgb, var(--primary) 18%, #fff);
 }
 
 .suggestions {
@@ -424,147 +431,168 @@ p {
 }
 
 .chip {
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--border);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
   color: var(--text);
   border-radius: 999px;
-  padding: 7px 14px;
+  padding: 8px 15px;
   font-size: 0.85rem;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  transition: box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .chip:hover {
-  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
   background: var(--primary-softer);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, var(--border));
   color: var(--primary);
 }
 
-/* ---------- Landing (until the first question) ---------- */
+/* ---------- Welcome screen ---------- */
 
 .landing {
   flex: 1;
   overflow-y: auto;
   display: flex;
-  align-items: center;
+  align-items: center;  /* the welcome block sits in the optical centre of whatever height is left */
   justify-content: center;
-  padding: 28px 20px;
-  background: var(--surface-muted);
+  padding: clamp(24px, 5vh, 56px) var(--gutter);
 }
 
+/* A defined hero panel, so the welcome screen has structure instead of text adrift on the page. */
 .landing__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
   width: 100%;
-  max-width: 540px;
+  max-width: 660px;
+  padding: clamp(28px, 4.5vh, 48px) clamp(20px, 4vw, 44px) clamp(26px, 4vh, 40px);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(168deg, color-mix(in srgb, var(--primary) 9%, #fff), var(--surface) 58%);
+  box-shadow: var(--shadow-md), inset 0 0 0 1px color-mix(in srgb, var(--border) 80%, transparent);
   text-align: center;
+}
+
+.landing__emblem {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 2px;
+  border-radius: 18px;
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
+  color: #fff;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: var(--shadow-md);
 }
 
 .landing__eyebrow {
   font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--text-subtle);
+  color: var(--primary);
 }
 
 .landing__title {
-  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 1.9rem);
-  line-height: 1.2;
-  font-weight: 640;
-  letter-spacing: -0.02em;
+  font-size: clamp(1.9rem, 1.2rem + 2.4vw, 2.9rem);
+  line-height: 1.1;
+  font-weight: 660;
+  letter-spacing: -0.03em;
   color: var(--text);
 }
 
 .landing__subtitle {
-  max-width: 42ch;
+  max-width: 44ch;
   color: var(--text-muted);
-  font-size: 0.95rem;
+  font-size: 1.02rem;
 }
 
 .landing__actions {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  margin-top: 6px;
+  gap: 14px;
+  margin-top: 10px;
 }
 
 .landing__topics {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .quick-action {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  min-height: 46px;
-  padding: 8px 16px 8px 9px;
-  border: 1px solid var(--border);
+  gap: 10px;
+  min-height: 48px;
+  padding: 9px 20px 9px 10px;
+  border: none;
   border-radius: 999px;
   background: var(--surface);
+  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border);
   color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 500;
+  font-size: 0.95rem;
+  font-weight: 550;
   cursor: pointer;
-  box-shadow: var(--shadow-xs);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .quick-action:hover {
-  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--primary) 35%, var(--border));
   transform: translateY(-1px);
 }
 
 .quick-action__icon {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   background: var(--primary-soft);
   color: var(--primary);
 }
 
 .quick-action__icon svg {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
 }
 
 /* The availability shortcut is the one action that starts a search rather than a question. */
 .quick-action--primary {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
   color: #fff;
-  font-weight: 600;
+  font-weight: 620;
+  padding-right: 24px;
+  box-shadow: var(--shadow-md);
 }
 
 .quick-action--primary .quick-action__icon {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.2);
   color: #fff;
 }
 
 .quick-action--primary:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .landing__examples {
-  margin-top: 10px;
+  margin-top: 14px;
   width: 100%;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
 }
 
 .landing__examples-label {
-  margin-bottom: 10px;
-  font-size: 0.8rem;
+  margin-bottom: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--text-subtle);
 }
 
@@ -579,7 +607,8 @@ p {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .quick-action:hover {
+  .quick-action:hover,
+  .quick-action--primary:hover {
     transform: none;
   }
 }
@@ -589,20 +618,19 @@ p {
 .btn {
   border: none;
   border-radius: var(--radius-sm);
-  padding: 9px 16px;
+  padding: 10px 18px;
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: 620;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 .btn:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .btn--primary {
-  background: var(--primary);
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
   color: #fff;
 }
 
@@ -610,23 +638,22 @@ p {
   background: var(--primary-hover);
 }
 
-/* Still shaped like a button, just clearly not ready yet: a faded brand fill reads as broken. */
+/* Still shaped like a button, just clearly not ready: a faded brand fill reads as broken. */
 .btn--primary:disabled {
   background: var(--surface);
   color: var(--text-subtle);
   box-shadow: inset 0 0 0 1px var(--border);
-  opacity: 1;
 }
 
 .btn--secondary {
   background: var(--surface);
   color: var(--primary);
-  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .btn--secondary:hover:not(:disabled) {
   background: var(--primary-softer);
-  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, var(--border));
 }
 
 .btn--link {
@@ -662,7 +689,7 @@ p {
 }
 
 .icon-btn--send {
-  background: var(--primary);
+  background: linear-gradient(140deg, var(--primary), var(--primary-deep));
   color: #fff;
 }
 
@@ -734,16 +761,17 @@ a:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-subtle);
 }
 
 .booking-form input[type='date'] {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
+  padding: 11px 12px;
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
@@ -756,9 +784,9 @@ a:focus-visible,
 
 .stepper__label {
   display: block;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-subtle);
   margin-bottom: 5px;
@@ -768,22 +796,22 @@ a:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--border);
   background: var(--surface);
   padding: 3px;
 }
 
 .stepper__controls button {
   width: 34px;
-  height: 32px;
+  height: 34px;
   border: none;
   background: transparent;
   font-size: 1.15rem;
   line-height: 1;
   color: var(--primary);
   cursor: pointer;
-  border-radius: 7px;
+  border-radius: 8px;
   transition: background 0.15s ease;
 }
 
@@ -797,7 +825,7 @@ a:focus-visible,
 }
 
 .stepper__controls output {
-  font-weight: 600;
+  font-weight: 620;
   font-size: 0.9rem;
 }
 
@@ -858,21 +886,21 @@ a:focus-visible,
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  padding: 13px 15px;
-  border: 1px solid var(--border);
+  padding: 14px 16px;
   border-radius: var(--radius);
-  background: var(--surface);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition: box-shadow 0.15s ease, background 0.15s ease;
 }
 
 .room-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-xs);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border-strong);
 }
 
 .room-card h4 {
   font-size: 0.95rem;
-  font-weight: 620;
+  font-weight: 640;
   letter-spacing: -0.01em;
 }
 
@@ -891,9 +919,8 @@ a:focus-visible,
 
 .badge {
   font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  padding: 3px 9px;
+  font-weight: 620;
+  padding: 3px 10px;
   border-radius: 999px;
   background: var(--surface-sunken);
   color: var(--text-muted);
@@ -905,8 +932,8 @@ a:focus-visible,
 }
 
 .badge--warn {
-  background: var(--warn-bg);
-  color: var(--warn-text);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .room-card__price {
@@ -919,7 +946,7 @@ a:focus-visible,
 
 .room-card__total {
   font-weight: 680;
-  font-size: 1.05rem;
+  font-size: 1.1rem;
   letter-spacing: -0.02em;
 }
 
@@ -943,28 +970,29 @@ a:focus-visible,
 /* ---------- Composer ---------- */
 
 .composer {
-  padding: 12px 16px 6px;
+  padding: 14px var(--gutter) 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
+/* One bar: the date shortcut and send sit inside the field. */
 .composer__bar {
   display: flex;
   align-items: flex-end;
   gap: 6px;
   padding: 5px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+  transition: box-shadow 0.15s ease;
 }
 
 .composer__bar:focus-within {
-  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
-  box-shadow: 0 0 0 4px var(--primary-ring);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, var(--border)), 0 0 0 4px var(--primary-ring);
 }
 
 .composer textarea {
@@ -974,7 +1002,7 @@ a:focus-visible,
   border: none;
   outline: none;
   background: transparent;
-  padding: 10px 4px;
+  padding: 10px 6px;
   max-height: 120px;
   min-height: 24px;
   font-size: 0.95rem;
@@ -994,30 +1022,24 @@ a:focus-visible,
 }
 
 .disclaimer {
-  padding: 6px 16px 12px;
+  padding: 4px var(--gutter) 14px;
   font-size: 0.7rem;
   line-height: 1.45;
   color: var(--text-subtle);
   text-align: center;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 /* ---------- Mobile ---------- */
 
 @media (max-width: 640px) {
   .app {
-    padding: 0;
-  }
-
-  .chat {
-    border: none;
-    border-radius: 0;
-    max-width: none;
-    box-shadow: none;
+    --gutter: 14px;
   }
 
   .chat__header {
-    padding: 12px 14px;
+    padding: 12px var(--gutter);
   }
 
   .chat__title p {
@@ -1025,27 +1047,31 @@ a:focus-visible,
   }
 
   .messages {
-    padding: 16px 12px 20px;
+    padding: 18px var(--gutter) 22px;
     gap: 14px;
   }
 
   .bubble {
-    max-width: 92%;
+    max-width: 94%;
   }
 
   .landing {
-    padding: 22px 16px;
+    padding: 20px var(--gutter);
   }
 
-  .landing__examples {
-    margin-top: 6px;
-    padding-top: 14px;
+  .landing__inner {
+    padding: 26px 18px 24px;
+    border-radius: var(--radius-lg);
+  }
+
+  .landing__subtitle {
+    font-size: 0.95rem;
   }
 
   .quick-action {
-    font-size: 0.88rem;
-    min-height: 44px;
-    padding: 7px 14px 7px 8px;
+    font-size: 0.9rem;
+    min-height: 46px;
+    padding: 8px 16px 8px 8px;
   }
 
   .room-card {
@@ -1061,11 +1087,10 @@ a:focus-visible,
   }
 
   .composer {
-    padding: 10px 12px 4px;
-    padding-bottom: max(4px, env(safe-area-inset-bottom));
+    padding: 10px var(--gutter) 4px;
   }
 
   .disclaimer {
-    padding: 6px 14px 10px;
+    padding: 4px var(--gutter) max(10px, env(safe-area-inset-bottom));
   }
 }

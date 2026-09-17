@@ -43,3 +43,8 @@ export function partyLabel(t: Translate, adults: number, children: number): stri
   const a = t(adults === 1 ? 'unit.adult' : 'unit.adults', { count: adults })
   return children > 0 ? `${a}, ${t(children === 1 ? 'unit.child' : 'unit.children', { count: children })}` : a
 }
+
+/** A property's initial for the brand mark, skipping a leading article ("The Palm Grove" -> "P"). */
+export function monogram(hotelName: string): string {
+  return hotelName.replace(/^(the|le|la|el|hotel)\s+/i, '').charAt(0).toUpperCase()
+}
