@@ -19,7 +19,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 
 | Capability | Status | Evidence | Remaining gap |
 |---|---|---|---|
-| GLM runtime provider (default) | IMPLEMENTED + TESTED | `app/llm/glm_provider.py`: forced tool call, typed errors, retry policy, HTTPS required in production. Contract tests with mocked transport; real slow-server timeout test. Live GLM 5.2: development suite 34/34 (`glm-5.2-final`, also adapter runs 1–2: 34/34), holdout 12/12 | Production GLM endpoint not chosen; provider SLA, quota and data terms not assessed |
+| GLM runtime provider (default) | IMPLEMENTED + TESTED | `app/llm/glm_provider.py`: forced tool call, typed errors, retry policy, HTTPS required in production. Contract tests with mocked transport; real slow-server timeout test. Live GLM 5.2: development suite 42/42 (`glm-rev8`; earlier 34/34 runs on smaller versions of the suite), holdout 12/12 | Production GLM endpoint not chosen; provider SLA, quota and data terms not assessed |
 | Anthropic provider (alternative) | IMPLEMENTED + NOT VERIFIED | Adapter tested with the real SDK against a mocked HTTP transport; provider-neutral contract and failure tests | **Live verification: NOT VERIFIED — no Anthropic credential** |
 | Provider-neutral contract | IMPLEMENTED + TESTED | `tests/test_contracts.py`: tool calls, no tools on `generate`, and timeout / 503 / plain-text output → identical fallback and public code across anthropic, glm and scripted providers (9 cases) | — |
 | Multi-tenancy (application) | IMPLEMENTED + TESTED | Tenant-scoped repositories and keys; cross-hotel 404s (`test_tenancy.py`); cross-tenant read on another replica → 404; holdout `holdout-cross-tenant-facts` (offline and GLM) | Persistent tenant registry; tenant admin API |
@@ -48,7 +48,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Graceful shutdown | IMPLEMENTED + TESTED (lifespan) | FastAPI lifespan flushes audit events and closes clients (`Container.close`, exercised whenever a test client exits; audit flush asserted in the PostgreSQL tests) | SIGTERM draining under uvicorn not measured in the current setup; readiness does not flip to draining |
 | Migrations | IMPLEMENTED + TESTED | Ordered, transactional, checksummed, advisory-locked; run with `python -m app.db.migrate` (optional PostgreSQL only; tested locally once, not in CI) | Rollback strategy (forward-only by design) |
 | Configuration and flags | IMPLEMENTED + TESTED | Startup validation incl. HTTPS, mock and lease rules; unknown flags fail startup ([CONFIGURATION.md](CONFIGURATION.md)) | Runtime flag changes; secret manager |
-| Frontend resilience | IMPLEMENTED + TESTED | 29 Vitest tests incl. the landing page, quick actions, busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 14/14 (desktop + mobile) | Full screen-reader audit |
+| Frontend resilience | IMPLEMENTED + TESTED | 30 Vitest tests incl. the landing page, quick actions, busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 14/14 (desktop + mobile) | Full screen-reader audit |
 | Admin authentication | DESIGNED | `AuthProvider` boundary; default refuses with 401 `UNAUTHORIZED` | OIDC/JWT NOT IMPLEMENTED |
 | Guest authentication | NOT IMPLEMENTED | Booking tools require a principal that nothing issues | Identity provider integration |
 | Semantic retrieval | NOT IMPLEMENTED | Flag fails startup if enabled | Only if knowledge outgrows the prompt |
@@ -63,7 +63,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
 | Backend pytest without services (CI `backend` job equivalent) | **460 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
-| Frontend Vitest | **29 passed** (landing page and conversation) |
+| Frontend Vitest | **30 passed** (landing page and conversation) |
 | Playwright E2E (desktop + mobile, AI disabled) | **14 passed** |
 | Offline eval, development suite | **36/36** (6 AI-only skipped; 42 scenarios incl. 6 conversational), critical 16/16, no regressions vs baseline |
 | Offline eval, holdout suite | **12/12**, critical 10/10 |

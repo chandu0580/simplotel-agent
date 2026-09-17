@@ -321,7 +321,7 @@ There is no agent loop: every tool result is final, so nothing needs to go back 
 
 The rendered system prompt is memoised per `(hotel_id, knowledge_version, evidence ids)` so it is byte-identical across turns, and the Anthropic adapter marks it `cache_control: ephemeral`. The GLM adapter records cached prompt tokens when the endpoint reports them. Prompt cache hit rates have not been measured.
 
-**GLM runtime evidence (not Claude).** With `glm-5.2` through the GLM-native adapter: development suite 34/34 in three runs, two adapter runs and a final run on the final code (decision accuracy 18/18 in each; groundedness 13/13, 14/14 and 14/14; final-run critical 14/14; per-scenario latency p50 5511 / 5593 / 3718 ms, p95 12620 / 14280 / 10062 ms) and holdout suite 12/12 with all 10 critical scenarios passing. Earlier runs over the Anthropic-format path scored 33/34, 34/34 and 32/34. These numbers are evidence for the GLM runtime only. They say nothing about Claude quality or latency. Details: [EVALUATION.md](EVALUATION.md).
+**GLM runtime evidence (not Claude).** With `glm-5.2` through the GLM-native adapter, on the current code: development suite 42/42 (critical 16/16, decision accuracy 17/17, p50 2560 ms) and holdout suite 12/12 with all 10 critical scenarios passing. Earlier runs, on smaller versions of the suite, scored 34/34 three times (decision accuracy 18/18 in each; p50 5511 / 5593 / 3718 ms). Earlier runs over the Anthropic-format path scored 33/34, 34/34 and 32/34. These numbers are evidence for the GLM runtime only. They say nothing about Claude quality or latency. Details: [EVALUATION.md](EVALUATION.md).
 
 ---
 

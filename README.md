@@ -14,7 +14,7 @@ The project began as a take-home assignment for Simplotel and has since been evo
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
 | **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
-| **GLM (default provider)** | Development suite 34/34 in three runs (two adapter runs and a final run on the final code) and holdout suite 12/12 with the GLM-native adapter. This is evidence for the GLM runtime only, **not** Claude verification. |
+| **GLM (default provider)** | Development suite **42/42** and holdout suite **12/12** on the current code (`backend/evals/results/glm-rev8`), plus offline runs of both suites. This is evidence for the GLM runtime only, **not** Claude verification. |
 | **CI** | Workflows are defined; **neither has been run on GitHub**. |
 
 Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
@@ -29,7 +29,7 @@ Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](doc
   - If reservations are down, the guest gets a safe reply, and availability endpoints return 503.
   - Admin requests without configured auth get an honest 401.
 - **Multi-tenant.** Every request is scoped to a tenant and hotel. Two demo tenants (a Goa resort and a Bengaluru business hotel) prove isolation.
-- **Guest UI.** English plus a draft Hindi translation, hotel branding, loading/error/retry/offline states, keyboard and screen-reader support.
+- **Guest UI.** A landing page (`/`) with the property, its rooms and the ways in, and the conversation (`/#chat`): welcome screen, quick actions, room cards and a date/guest form. English plus a draft Hindi translation, hotel branding, loading/error/retry/offline states, keyboard and screen-reader support.
 
 ## Architecture
 
@@ -94,7 +94,7 @@ uvicorn app.main:app --reload --port 8000     # API docs: http://localhost:8000/
 ```bash
 cd frontend
 npm install
-npm run dev                        # http://localhost:5173 (Vite proxies /api to :8000)
+npm run dev                        # http://localhost:5173 - landing page; the assistant is at /#chat (Vite proxies /api to :8000)
 ```
 
 Without `LLM_API_KEY` and `LLM_BASE_URL` the assistant runs in offline FAQ mode. To enable AI, put the provider settings (see [Environment](#environment)) in `backend/.env`.
@@ -192,7 +192,7 @@ curl -s -X POST http://localhost:8000/api/v1/hotels/hotel-goa-001/conversations/
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/v1/hotels/{hotel_id}` | Public profile: branding, languages, today's date at the hotel, form limits |
+| `GET /api/v1/hotels/{hotel_id}` | Public profile: branding, languages, today's date at the hotel, form limits, published room types with indicative rates, suggested questions |
 | `POST /api/v1/hotels/{hotel_id}/conversations` | Start a conversation |
 | `GET` / `DELETE /api/v1/hotels/{hotel_id}/conversations/{id}` | View or delete (data minimisation) |
 | `POST .../conversations/{id}/messages` | Guest turn |
@@ -285,9 +285,9 @@ Two suites. The **development** suite (34 scenarios: functional, grounding, tool
 
 | Run | Result |
 |---|---|
-| Offline, development suite | 28/28 (6 AI-only skipped); critical 14/14; no regressions vs baseline |
+| Offline, development suite | 36/36 (6 AI-only skipped); critical 16/16; no regressions vs baseline |
 | Offline, holdout suite | 12/12; critical 10/10 |
-| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | 34/34 in three runs (two adapter runs, then a final run on the final code: critical 14/14, p50 3718 ms, p95 10062 ms); decision accuracy 18/18 in all three |
+| GLM `glm-5.2`, GLM-native adapter, development suite (**GLM runtime only, not Claude**) | **42/42** on the current code (`glm-rev8`: critical 16/16, decision accuracy 17/17, p50 2560 ms). Earlier runs on smaller versions of the suite: 34/34 three times |
 | GLM `glm-5.2`, GLM-native adapter, holdout suite (**GLM runtime only, not Claude**) | 12/12; critical 10/10; served by AI 12/12 |
 | Anthropic live | **NOT VERIFIED — no Anthropic credential** |
 

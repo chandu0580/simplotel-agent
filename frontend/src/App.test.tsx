@@ -90,7 +90,7 @@ const availabilityResult: AvailabilityResult = {
 }
 
 /** Routes fetch calls for the v1 API by path and records them. */
-function mockApi(routes: { messages?: Handler[]; availability?: Handler[]; conversations?: Handler[] }) {
+function mockApi(routes: { messages?: Handler[]; availability?: Handler[]; conversations?: Handler[]; hotelFails?: boolean }) {
   const calls: { method: string; path: string; body: unknown }[] = []
   const queues = { messages: [...(routes.messages ?? [])], availability: [...(routes.availability ?? [])], conversations: [...(routes.conversations ?? [])] }
   let created = 0
@@ -98,7 +98,10 @@ function mockApi(routes: { messages?: Handler[]; availability?: Handler[]; conve
     const path = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method: init?.method ?? 'GET', path, body })
-    if (path.endsWith('/api/v1/hotels/hotel-goa-001')) return json(200, hotelInfo)
+    if (path.endsWith('/api/v1/hotels/hotel-goa-001')) {
+      if (routes.hotelFails) throw new TypeError('network')
+      return json(200, hotelInfo)
+    }
     if (path.endsWith('/conversations')) {
       const handler = queues.conversations.shift()
       if (handler) return handler(body)
@@ -599,6 +602,20 @@ describe('Landing page', () => {
     await user.click(await screen.findByRole('button', { name: 'Check availability' }))
 
     expect(await screen.findByRole('form', { name: 'Check availability' })).toBeInTheDocument()
+  })
+
+  it('still works when the hotel profile cannot be loaded', async () => {
+    mockApi({ hotelFails: true })
+    renderHome()
+    const user = userEvent.setup()
+
+    // Default name, and no half-empty sections for data that never arrived.
+    expect(await screen.findByRole('heading', { name: 'The Palm Grove Resort', level: 1 })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Our rooms' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Front desk/i)).not.toBeInTheDocument()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Chat with assistant' }))[0])
+    expect(screen.getByLabelText('Ask a question')).toBeEnabled()
   })
 
   it('returns to the landing page from the conversation', async () => {
