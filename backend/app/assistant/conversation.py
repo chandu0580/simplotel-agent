@@ -25,7 +25,7 @@ from typing import Literal
 from ..knowledge.models import KnowledgeBase
 from ..schemas import ChatReply
 
-ConversationalIntent = Literal["greeting", "capability", "smalltalk", "thanks", "goodbye", "off_topic"]
+ConversationalIntent = Literal["greeting", "capability", "smalltalk", "thanks", "goodbye", "confirm", "off_topic"]
 
 # Any hotel subject in the message means it is a real question, not small talk.
 HOTEL_SUBJECT = re.compile(
@@ -50,6 +50,15 @@ _OFF_TOPIC = re.compile(
     r"write\s+(me\s+)?(a\s+)?(poem|essay|song|story|code)|tell\s+me\s+a\s+joke|"
     r"solve\s+this|homework|translate\s+this|"
     r"medical\s+advice|legal\s+advice)\b",
+    re.I,
+)
+
+# "are you sure?" is about the previous reply, not about the hotel. Sent to the model it comes back
+# without citations, and the uncited-answer guardrail then replaces it with a front-desk escalation —
+# so a guest who simply double-checks is told the assistant has no reliable answer.
+_CONFIRM = re.compile(
+    r"\b(are\s+you\s+sure|you\s+sure|r\s+u\s+sure|are\s+you\s+certain|is\s+(that|this|it)\s+(right|correct|true|accurate)|"
+    r"really|seriously|for\s+real|how\s+do\s+you\s+know|how\s+can\s+you\s+be\s+sure)\b",
     re.I,
 )
 
@@ -99,6 +108,8 @@ def classify(text: str) -> ConversationalIntent | None:
         return "off_topic"
     if HOTEL_SUBJECT.search(cleaned):
         return None  # carries a real question: let the normal routing answer it
+    if _CONFIRM.search(cleaned):
+        return "confirm"
     if _CAPABILITY.search(cleaned):
         return "capability"
     if _SMALLTALK.search(cleaned):
@@ -125,6 +136,8 @@ def reply_for(intent: ConversationalIntent, kb: KnowledgeBase, suggestions: list
         "smalltalk": f"All good here, thanks! What can I help you with at {hotel}?",
         "thanks": "You're welcome! Anything else about your stay?",
         "goodbye": f"Thank you for visiting {hotel} — have a lovely stay! 🌴",
+        # States no hotel fact: it describes where answers come from, which is true of every answer.
+        "confirm": f"Yes — everything I tell you comes from {hotel}'s own information, and the sources are shown under each answer.",
         # No front-desk contact on purpose: the front desk cannot answer this either.
         "off_topic": f"That's outside what I can help with — I'm the guest assistant for {hotel}. Ask me about rooms, amenities, policies or availability.",
     }

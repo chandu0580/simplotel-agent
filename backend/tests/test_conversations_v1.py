@@ -105,6 +105,16 @@ def test_hotel_profile_exposes_branding_but_no_secrets(offline_client):
     assert "key" not in str(body).lower() and "token" not in str(body).lower()
 
 
+def test_hotel_profile_lists_published_rooms_for_the_landing_page(offline_client):
+    """The landing page shows room types and indicative rates; live prices still come from a search."""
+    rooms = offline_client.get(BASE).json()["rooms"]
+
+    garden = next(r for r in rooms if r["id"] == "garden-standard")
+    assert [r["name"] for r in rooms] == ["Garden Standard Room", "Deluxe Pool View Room", "Family Suite", "Ocean Villa"]
+    assert (garden["base_rate"], garden["max_occupancy"], garden["breakfast_included"]) == (5200, 2, False)
+    assert garden["beds"] and garden["description"]
+
+
 def test_locale_is_passed_to_the_model(ai_client, fake_messages):
     fake_messages.responses.append(answer_response({"type": "answer", "text": "चेक-इन दोपहर 2:00 बजे से है।", "source_ids": ["timings.check_in_out"], "suggestions": []}))
     cid = start(ai_client, locale="hi")

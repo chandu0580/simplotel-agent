@@ -91,11 +91,25 @@ export interface AvailabilityRequest {
   children: number
 }
 
+/** Published room content shown on the landing page. `base_rate` is indicative, not a quote. */
+export interface RoomSummary {
+  id: string
+  name: string
+  description: string
+  beds: string
+  size_sqm: number
+  max_occupancy: number
+  breakfast_included: boolean
+  base_rate: number
+  features: string[]
+}
+
 export interface HotelInfo {
   hotel: {
     id: string
     name: string
     tagline: string
+    address: string
     city: string
     phone: string
     email: string
@@ -108,6 +122,7 @@ export interface HotelInfo {
   }
   today: string
   max_guests: number
+  rooms: RoomSummary[]
   suggested_questions: string[]
   features: { ai_assistant: boolean }
 }

@@ -92,3 +92,21 @@ export function IconSend(props: IconProps) {
     </Icon>
   )
 }
+
+export function IconBack(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M19 12H6" />
+      <path d="M11.5 6.5 6 12l5.5 5.5" />
+    </Icon>
+  )
+}
+
+export function IconChat(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4.5 6.5A2.5 2.5 0 0 1 7 4h10a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 17 16H9.5L5.5 19.5V16H7a2.5 2.5 0 0 1-2.5-2.5Z" />
+      <path d="M9 9h6M9 12h4" />
+    </Icon>
+  )
+}

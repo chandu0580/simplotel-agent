@@ -9,7 +9,7 @@
       {
         "knowledge": "000669a8d553",
         "model": "glm-5.2",
-        "prompt": "guest-assistant@5+2f3335d7",
+        "prompt": "guest-assistant@7+4a4a7f7f",
         "tool_schema": "2613c67ef2b6"
       },
       {
@@ -48,7 +48,7 @@
     "served_by_ai": "0/36",
     "critical_passed": "16/16",
     "latency_ms_p50": 0,
-    "latency_ms_p95": 3,
+    "latency_ms_p95": 4,
     "latency_ms_mean": 0
   },
   "rows": [
@@ -303,7 +303,7 @@
       ],
       "critical": false,
       "status": "PASS",
-      "latency_ms": 3,
+      "latency_ms": 4,
       "served_by": "offline",
       "type": "availability",
       "decision": "offline",
@@ -320,7 +320,7 @@
         {
           "name": "check_availability",
           "status": "ok",
-          "latency_ms": 2,
+          "latency_ms": 3,
           "error_code": null,
           "invoked_by": "system",
           "arguments": {
@@ -715,7 +715,7 @@
       ],
       "critical": false,
       "status": "PASS",
-      "latency_ms": 1,
+      "latency_ms": 3,
       "served_by": "offline",
       "type": "availability",
       "decision": "offline",
@@ -801,7 +801,7 @@
       ],
       "critical": false,
       "status": "PASS",
-      "latency_ms": 0,
+      "latency_ms": 1,
       "served_by": "offline",
       "type": "answer",
       "decision": "offline",
@@ -841,7 +841,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 0,
+      "latency_ms": 1,
       "served_by": "offline",
       "type": "fallback",
       "decision": "offline",
@@ -911,7 +911,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 0,
+      "latency_ms": 1,
       "served_by": "offline",
       "type": "answer",
       "decision": "offline",
@@ -952,7 +952,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 0,
+      "latency_ms": 1,
       "served_by": "offline",
       "type": "answer",
       "decision": "offline",
@@ -1069,7 +1069,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 0,
+      "latency_ms": 1,
       "served_by": "offline",
       "type": "collect_booking_details",
       "decision": "offline",
@@ -1108,7 +1108,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 1,
+      "latency_ms": 2,
       "served_by": "offline",
       "type": "availability",
       "decision": "offline",
@@ -1165,7 +1165,7 @@
       ],
       "critical": true,
       "status": "PASS",
-      "latency_ms": 1,
+      "latency_ms": 0,
       "served_by": "offline",
       "type": "answer",
       "decision": "offline",
@@ -1314,7 +1314,7 @@
         "answer"
       ],
       "versions": {
-        "prompt": "guest-assistant@5+2f3335d7",
+        "prompt": "guest-assistant@7+4a4a7f7f",
         "tool_schema": "2613c67ef2b6",
         "knowledge": "000669a8d553",
         "model": "glm-5.2"

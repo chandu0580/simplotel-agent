@@ -63,6 +63,22 @@ def hotel_profile(hotel_id: str, request: Request):
         "hotel": profile.model_dump(),
         "today": today.isoformat(),
         "max_guests": max(r.max_occupancy for r in kb.rooms),
+        # Published room content for the landing page. `base_rate` is the indicative "from" rate, not a
+        # quote: real prices for real dates come from check_availability, which is seasonal.
+        "rooms": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "description": r.description,
+                "beds": r.beds,
+                "size_sqm": r.size_sqm,
+                "max_occupancy": r.max_occupancy,
+                "breakfast_included": r.breakfast_included,
+                "base_rate": r.base_rate,
+                "features": r.features,
+            }
+            for r in kb.rooms
+        ],
         "suggested_questions": SUGGESTED_QUESTIONS,
         "features": {"ai_assistant": c.assistant.ai_available_for(tenant.feature_flags)},
     }

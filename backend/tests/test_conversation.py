@@ -29,6 +29,8 @@ THANKS = ["thanks", "Thank you!", "thx", "great", "perfect", "okay", "ok", "got 
 GOODBYE = ["bye", "Goodbye!", "see you", "take care", "good night"]
 SMALLTALK = ["how are you?", "How are u", "what's up", "can I ask something?", "can I ask you a question?", "nice to meet you", "are you there?", "brooh?", "hey bro"]
 OFF_TOPIC = ["what is python?", "What is the weather tomorrow?", "what's the stock price of TCS?", "tell me a joke", "write me a poem", "who won the cricket world cup?"]
+# Double-checking the assistant, not asking the hotel anything (from manual testing).
+CONFIRM = ["are you sure?", "Are you sure?!", "you sure?", "really?", "is that correct?", "how do you know?"]
 # Hotel questions the knowledge base cannot answer: these must still reach the front desk.
 UNKNOWN_HOTEL_FACTS = ["is there a helipad?", "is there a casino in the hotel?", "do you have a bowling alley?"]
 HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you have a pool?", "what is the cancellation policy?",
@@ -42,6 +44,8 @@ HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you h
     *[(m, "goodbye") for m in GOODBYE],
     *[(m, "smalltalk") for m in SMALLTALK],
     *[(m, "off_topic") for m in OFF_TOPIC],
+    *[(m, "confirm") for m in CONFIRM],
+    ("are you sure breakfast is included?", None),  # carries a real question: normal routing answers it
     *[(m, None) for m in UNKNOWN_HOTEL_FACTS],
     *[(m, None) for m in HOTEL_QUESTIONS],
     ("do you have rooms available?", None),
@@ -204,6 +208,29 @@ def test_off_topic_requests_are_declined_without_escalating_to_the_front_desk(ai
     assert "outside what I can help with" in reply["text"]
     for contact in ("+91 832 555 0142", "98220 55501", "stay@palmgroveresort.example"):
         assert contact not in reply["text"], "off-topic must not be escalated to the front desk"
+    assert provider.requests == []
+    assert len(reply["text"]) <= 200
+
+
+@pytest.mark.parametrize("ai_enabled", [False, True])
+@pytest.mark.parametrize("message", CONFIRM)
+def test_double_checking_the_assistant_is_not_treated_as_a_knowledge_gap(ai_enabled, message):
+    """"Are you sure?" asks about the previous reply, not about the hotel.
+
+    Sent to the model it came back as an uncited answer, and the uncited-answer guardrail replaced it
+    with "I couldn't find a reliable answer to that" plus the front-desk contacts - so a guest who
+    simply double-checked was told the assistant had nothing.
+    """
+    provider = ScriptedLLMProvider([])  # a model call would raise
+    container = build_container(Settings.for_tests(), clock=FixedClock(TODAY), llm_provider=provider if ai_enabled else None)
+    with TestClient(create_app(container=container)) as client:
+        cid = conversation(client)
+        reply = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": message}).json()["reply"]
+
+    assert reply["type"] == "clarification"
+    assert "couldn't find" not in reply["text"]
+    for contact in ("+91 832 555 0142", "98220 55501", "stay@palmgroveresort.example"):
+        assert contact not in reply["text"], "double-checking must not be escalated to the front desk"
     assert provider.requests == []
     assert len(reply["text"]) <= 200
 

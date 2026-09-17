@@ -472,6 +472,15 @@ Role hierarchy (`auth/principal.py`): platform_admin includes tenant_admin, whic
 
 Source: `frontend/src/hooks/useChat.ts`, `frontend/src/api/client.ts`, `components/MessageList.tsx`, `components/AvailabilityForm.tsx`.
 
+**Two screens, one page.** `/` is the landing page (`components/Home.tsx`): property name, tagline,
+check-in and check-out times, the published room types with their indicative rates, the suggested
+questions and the front-desk contacts - all from `GET /api/v1/hotels/{hotel_id}`, which is why no
+content on it can drift from the knowledge base. `/#chat` is the conversation. `App.tsx` reads the
+hash and listens for `hashchange`, so the browser's back button moves between them and the assistant
+can be linked to directly; a router would be a dependency for one route. Both screens share the
+brand colour, the language picker and the chat state, so opening the conversation from a suggested
+question sends it immediately.
+
 ```mermaid
 sequenceDiagram
     autonumber

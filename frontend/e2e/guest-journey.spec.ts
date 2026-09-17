@@ -13,13 +13,18 @@ function upcomingWednesday(): { checkIn: string; checkOut: string } {
   return { checkIn: iso(date), checkOut: iso(out) }
 }
 
+/** The conversation lives at #chat; the landing page is what a guest sees at /. */
+async function openChat(page: import('@playwright/test').Page) {
+  await page.goto('/#chat')
+}
+
 async function ask(page: import('@playwright/test').Page, text: string) {
   await page.getByLabel('Ask a question').fill(text)
   await page.getByRole('button', { name: 'Send message' }).click()
 }
 
 test('guest asks questions, follows up, and checks availability end to end', async ({ page }) => {
-  await page.goto('/')
+  await openChat(page)
   await expect(page.getByRole('heading', { name: 'The Palm Grove Resort' })).toBeVisible()
 
   // 1. Property question goes through the backend and is answered with a source.
@@ -52,7 +57,7 @@ test('guest asks questions, follows up, and checks availability end to end', asy
 })
 
 test('shows an error when the backend call fails and recovers on retry', async ({ page }) => {
-  await page.goto('/')
+  await openChat(page)
   await page.route('**/api/v1/hotels/*/conversations/*/messages', (route) => route.abort('connectionrefused'))
 
   await ask(page, 'What is the cancellation policy?')
@@ -66,13 +71,13 @@ test('shows an error when the backend call fails and recovers on retry', async (
 })
 
 test('asks for booking details when availability is requested without dates', async ({ page }) => {
-  await page.goto('/')
+  await openChat(page)
   await ask(page, 'Do you have rooms available?')
   await expect(page.getByRole('form', { name: 'Check availability' })).toBeVisible()
 })
 
 test('landing: quick action answers, follow-up keeps context', async ({ page }) => {
-  await page.goto('/')
+  await openChat(page)
 
   // Landing state: value proposition, quick actions and examples, with the input ready.
   await expect(page.getByText('Your stay, made easier')).toBeVisible()
@@ -94,7 +99,7 @@ test('landing: quick action answers, follow-up keeps context', async ({ page }) 
 })
 
 test('conversational questions never open the availability form, but asking for rooms does', async ({ page }) => {
-  await page.goto('/')
+  await openChat(page)
   const log = page.getByRole('log', { name: 'Conversation' })
 
   await ask(page, 'hi')
@@ -114,4 +119,35 @@ test('conversational questions never open the availability form, but asking for 
   // Availability intent: the form appears.
   await ask(page, 'Do you have rooms available?')
   await expect(page.getByRole('form', { name: 'Check availability' })).toBeVisible()
+})
+
+
+test('landing page: rooms, questions and the way into the conversation', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: 'The Palm Grove Resort', level: 1 })).toBeVisible()
+  await expect(page.getByText('A beachside retreat in Candolim, North Goa')).toBeVisible()
+  await expect(page.getByText(/Check-in from 2:00\s*[ap]m/i)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Garden Standard Room' })).toBeVisible()
+  await expect(page.getByText('Indicative rates', { exact: false })).toBeVisible()
+  await expect(page.getByLabel('Ask a question')).toHaveCount(0) // no composer on the landing page
+
+  await page.getByRole('button', { name: 'Chat with assistant' }).first().click()
+
+  await expect(page).toHaveURL(/#chat$/)
+  await expect(page.getByLabel('Ask a question')).toBeEnabled()
+  await expect(page.getByText('Your stay, made easier')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Back to home' }).click()
+  await expect(page.getByRole('heading', { name: 'Garden Standard Room' })).toBeVisible()
+})
+
+test('landing page: a suggested question opens the conversation and asks it', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'What time is check-in?' }).click()
+
+  const log = page.getByRole('log', { name: 'Conversation' })
+  await expect(log.getByText('What time is check-in?').first()).toBeVisible()
+  await expect(log.getByText(/2:00 PM/).first()).toBeVisible()
 })

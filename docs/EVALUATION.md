@@ -159,6 +159,20 @@ Live GLM 5.2, development suite: **42/42**, critical 16/16, decision accuracy 17
 guardrail interventions 0/42, p50 **1596 ms**, p95 4921 ms (`evals/results/glm-rev6.md`). Holdout, live:
 **12/12**, critical 10/10. Offline: development 36/36 (critical 16/16), holdout 10/10.
 
+#### Landing-page run (prompt revision 7)
+
+Revision 7 followed a live session where "are you sure?" was answered with "I couldn't find a reliable
+answer to that in our hotel information" plus the front-desk contacts. Double-checking is about the
+previous reply, not about the hotel: the model returned an uncited `answer` and the uncited-answer
+guardrail turned it into an escalation. It is now a deterministic conversational intent (`confirm`),
+and the prompt tells the model to answer questions about its own previous reply with `clarification`.
+
+Live GLM 5.2, development suite: **41/42**, critical 16/16, groundedness 14/14, p50 2326 ms
+(`evals/results/glm-rev7.md`). The one failure, `availability-past-date`, is model flakiness rather
+than a regression: the model argued about the past dates itself instead of passing them to
+`check_availability`, and the scenario passed 3/3 on re-run at the same revision. Offline:
+development 36/36 (critical 16/16), holdout 12/12.
+
 ## E. Holdout suite
 
 **What it is.** `backend/evals/holdout.json`: 12 adversarial scenarios written **after** prompt and guardrail development. Select it with `--suite holdout`; the development suite (`evals/scenarios.json`) is the default.

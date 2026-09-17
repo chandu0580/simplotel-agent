@@ -48,7 +48,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Graceful shutdown | IMPLEMENTED + TESTED (lifespan) | FastAPI lifespan flushes audit events and closes clients (`Container.close`, exercised whenever a test client exits; audit flush asserted in the PostgreSQL tests) | SIGTERM draining under uvicorn not measured in the current setup; readiness does not flip to draining |
 | Migrations | IMPLEMENTED + TESTED | Ordered, transactional, checksummed, advisory-locked; run with `python -m app.db.migrate` (optional PostgreSQL only; tested locally once, not in CI) | Rollback strategy (forward-only by design) |
 | Configuration and flags | IMPLEMENTED + TESTED | Startup validation incl. HTTPS, mock and lease rules; unknown flags fail startup ([CONFIGURATION.md](CONFIGURATION.md)) | Runtime flag changes; secret manager |
-| Frontend resilience | IMPLEMENTED + TESTED | 24 Vitest tests incl. landing quick actions, busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 10/10 (desktop + mobile) | Full screen-reader audit |
+| Frontend resilience | IMPLEMENTED + TESTED | 29 Vitest tests incl. the landing page, quick actions, busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 14/14 (desktop + mobile) | Full screen-reader audit |
 | Admin authentication | DESIGNED | `AuthProvider` boundary; default refuses with 401 `UNAUTHORIZED` | OIDC/JWT NOT IMPLEMENTED |
 | Guest authentication | NOT IMPLEMENTED | Booking tools require a principal that nothing issues | Identity provider integration |
 | Semantic retrieval | NOT IMPLEMENTED | Flag fails startup if enabled | Only if knowledge outgrows the prompt |
@@ -61,13 +61,13 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Check | Result |
 |---|---|
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
-| Backend pytest without services (CI `backend` job equivalent) | **390 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
+| Backend pytest without services (CI `backend` job equivalent) | **439 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
-| Frontend Vitest | **24 passed** |
-| Playwright E2E (desktop + mobile, AI disabled) | **10 passed** |
-| Offline eval, development suite | **34/34** (7 AI-only skipped; 41 scenarios incl. 6 conversational), critical 14/14, no regressions vs baseline |
+| Frontend Vitest | **29 passed** (landing page and conversation) |
+| Playwright E2E (desktop + mobile, AI disabled) | **14 passed** |
+| Offline eval, development suite | **36/36** (6 AI-only skipped; 42 scenarios incl. 6 conversational), critical 16/16, no regressions vs baseline |
 | Offline eval, holdout suite | **12/12**, critical 10/10 |
-| GLM 5.2 live, development suite (runtime evidence, not Claude) | **41/41**, critical 15/15, decision accuracy 18/18, groundedness 14/14, p50 1.7 s / p95 3.4 s after the brevity rules (was 3.7 s / 10.1 s), no regressions (`evals/results/glm-ux-fix`) |
+| GLM 5.2 live, development suite (runtime evidence, not Claude) | **41/42**, critical 16/16, groundedness 14/14, p50 2.3 s (`evals/results/glm-rev7`). The single failure is a flaky scenario, not a regression: `availability-past-date` passed 3/3 on re-run at the same prompt revision |
 | GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/glm-5.2-holdout-run1`) |
 | Load test (local, not capacity) | 0% errors at 10–100 users in all scenarios; see [PERFORMANCE.md](PERFORMANCE.md) |
 | Secret scans | 0 findings: tracked files, frontend bundle |

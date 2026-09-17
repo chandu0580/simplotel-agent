@@ -15,6 +15,7 @@ const hotelInfo = {
     id: 'hotel-goa-001',
     name: 'The Palm Grove Resort',
     tagline: 'A beachside retreat',
+    address: 'Fort Aguada Road, Candolim, Goa',
     city: 'Candolim, Goa',
     phone: '+91 832 555 0142',
     email: 'stay@palmgroveresort.example',
@@ -27,7 +28,20 @@ const hotelInfo = {
   },
   today: '2026-10-05',
   max_guests: 5,
-  suggested_questions: [],
+  rooms: [
+    {
+      id: 'garden-standard',
+      name: 'Garden Standard Room',
+      description: 'Cosy room overlooking the tropical garden.',
+      beds: '1 queen bed',
+      size_sqm: 26,
+      max_occupancy: 2,
+      breakfast_included: false,
+      base_rate: 5200,
+      features: ['Garden view'],
+    },
+  ],
+  suggested_questions: ['What time is check-in?'],
   features: { ai_assistant: true },
 }
 
@@ -106,12 +120,22 @@ function deferred() {
   return { promise, resolve }
 }
 
-function renderApp() {
+function renderAt(hash: string) {
+  window.location.hash = hash
   return render(
     <I18nProvider initialLocale="en">
       <App />
     </I18nProvider>,
   )
+}
+
+/** The conversation screen, which `#chat` addresses; the landing page is what `/` shows. */
+function renderApp() {
+  return renderAt('#chat')
+}
+
+function renderHome() {
+  return renderAt('')
 }
 
 async function ask(text: string) {
@@ -524,5 +548,67 @@ describe('Landing experience and conversational routing', () => {
     expect(sent).toEqual(['Which room is suitable for 3 guests?', 'thanks', 'does it include breakfast?'])
     // One server-side conversation throughout: the client never restarts it after small talk.
     expect(new Set(calls.filter((c) => c.path.endsWith('/conversations')).map((c) => c.path)).size).toBe(1)
+  })
+})
+
+
+describe('Landing page', () => {
+  it('shows the property, its rooms and the ways into the conversation', async () => {
+    mockApi({})
+    renderHome()
+
+    expect(await screen.findByRole('heading', { name: 'The Palm Grove Resort', level: 1 })).toBeInTheDocument()
+    expect(screen.getByText('A beachside retreat')).toBeInTheDocument()
+    expect(screen.getByText(/Check-in from 2:00\s*[ap]m/i)).toBeInTheDocument()  // casing varies by platform
+    expect(screen.getByText('Rooms for up to 5 guests')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Garden Standard Room' })).toBeInTheDocument()
+    expect(screen.getByText('from ₹5,200')).toBeInTheDocument() // indicative, not a quote for dates
+    expect(screen.getByText(/Indicative rates/)).toBeInTheDocument()
+    expect(screen.getByText('Fort Aguada Road, Candolim, Goa')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask a question')).not.toBeInTheDocument() // the composer belongs to the chat
+  })
+
+  it('opens the conversation when the guest chooses to chat', async () => {
+    mockApi({})
+    renderHome()
+    const user = userEvent.setup()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Chat with assistant' }))[0])
+
+    expect(window.location.hash).toBe('#chat')
+    expect(screen.getByLabelText('Ask a question')).toBeEnabled()
+    expect(screen.getByText('Your stay, made easier')).toBeInTheDocument()
+  })
+
+  it('sends a suggested question straight into the conversation', async () => {
+    const calls = mockApi({ messages: [() => json(200, turn({ text: 'Check-in is from 2:00 PM.' }))] })
+    renderHome()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'What time is check-in?' }))
+
+    await waitFor(() => expect(screen.getByText('Check-in is from 2:00 PM.')).toBeInTheDocument())
+    expect(calls.at(-1)?.body).toMatchObject({ message: 'What time is check-in?' })
+  })
+
+  it('opens the booking form when availability is chosen from the landing page', async () => {
+    mockApi({})
+    renderHome()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Check availability' }))
+
+    expect(await screen.findByRole('form', { name: 'Check availability' })).toBeInTheDocument()
+  })
+
+  it('returns to the landing page from the conversation', async () => {
+    mockApi({})
+    renderApp()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Back to home' }))
+
+    expect(screen.getByRole('heading', { name: 'Garden Standard Room' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask a question')).not.toBeInTheDocument()
   })
 })

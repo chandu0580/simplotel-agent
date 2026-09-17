@@ -31,6 +31,14 @@ export function formatShortDate(iso: string, locale = 'en-IN'): string {
   return parseISODate(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short' })
 }
 
+/** "14:00" as the guest's clock reads it ("2:00 pm"), falling back to the raw value. */
+export function formatTime(hhmm: string, locale = 'en-IN'): string {
+  const [hours, minutes] = hhmm.split(':').map(Number)
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return hhmm
+  const at = new Date(2000, 0, 1, hours, minutes)
+  return at.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
+}
+
 export function formatMoney(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
 }
