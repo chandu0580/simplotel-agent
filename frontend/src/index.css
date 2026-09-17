@@ -704,12 +704,13 @@ p {
   opacity: 1;
 }
 
+/* currentColor, not white: while a turn is in flight the send button is disabled and pale. */
 .icon-btn__spinner {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   animation: spin 0.7s linear infinite;
 }
 
