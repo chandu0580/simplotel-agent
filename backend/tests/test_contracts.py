@@ -121,8 +121,27 @@ def test_model_router_routes_every_task():
 # ---------- Reservation providers ----------
 
 
-@pytest.fixture(params=["mock", "resilient"])
+def _cloudbeds_provider():
+    """Cloudbeds adapter over a stub transport shaped like the documented getAvailableRoomTypes response."""
+    import httpx
+
+    from app.reservations.cloudbeds_provider import CloudbedsReservationProvider
+
+    body = {
+        "success": True,
+        "data": [{
+            "propertyID": "123456",
+            "propertyCurrency": [{"currencyCode": "INR"}],
+            "propertyRooms": [{"roomTypeID": "ocean-villa", "roomTypeName": "Ocean Villa", "maxGuests": 4, "roomRate": 21000.0, "roomsAvailable": 2}],
+        }],
+    }
+    return CloudbedsReservationProvider("cbat_test_key", {GOA: "123456"}, base_url="https://api.cloudbeds.example/api/v1.3", client=httpx.Client(transport=httpx.MockTransport(lambda _r: httpx.Response(200, json=body))))
+
+
+@pytest.fixture(params=["mock", "resilient", "cloudbeds"])
 def reservations(request, offline_container):
+    if request.param == "cloudbeds":
+        return _cloudbeds_provider()
     mock = MockReservationProvider(offline_container.settings.data_dir, InMemoryIdempotencyStore())
     if request.param == "mock":
         return mock
@@ -134,6 +153,7 @@ def test_reservation_provider_contract(reservations, offline_container):
 
     result = reservations.check_availability(ctx, kb, AvailabilityQuery(check_in=date(2026, 10, 7), check_out=date(2026, 10, 8), adults=2), TODAY)
     assert isinstance(result, AvailabilityResult) and result.available
+    assert all(offer.total_price > 0 and offer.rooms_left > 0 and offer.currency for offer in result.rooms)
     assert reservations.get_room(ctx, kb, "ocean-villa").name == "Ocean Villa"
     with pytest.raises(AvailabilityValidationError):
         reservations.check_availability(ctx, kb, AvailabilityQuery(check_in=date(2026, 10, 8), check_out=date(2026, 10, 7), adults=2), TODAY)

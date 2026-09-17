@@ -1,8 +1,8 @@
 # Reservation integration contract
 
-The assistant reads inventory and changes bookings only through `ReservationProvider` (`backend/app/reservations/provider.py`). The only implementation today is `MockReservationProvider`, which reads per-hotel `inventory.json` and holds bookings in memory. **No PMS, CRS or channel-manager API is integrated, and none is assumed here.** This page states what an adapter for any such system must guarantee, so it can be added without touching the assistant, tools or API.
+The assistant reads inventory and changes bookings only through `ReservationProvider` (`backend/app/reservations/provider.py`). Two implementations exist: `MockReservationProvider` (default, deterministic demo inventory from per-hotel `inventory.json`) and `CloudbedsReservationProvider` (`RESERVATION_PROVIDER=cloudbeds`, live availability and rates from the Cloudbeds PMS). This page states what an adapter for any such system must guarantee, so another one can be added without touching the assistant, tools or API.
 
-Status: interface, mock and resilience wrapper are **IMPLEMENTED + TESTED**; a real adapter is **NOT IMPLEMENTED**.
+Status: interface, mock, resilience wrapper and the Cloudbeds adapter are **IMPLEMENTED + TESTED** against stub transports. Whether the Cloudbeds adapter has been run against a real account is recorded in [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md); booking writes are **NOT IMPLEMENTED** by design.
 
 ## Interface
 
@@ -49,6 +49,24 @@ class ReservationProvider(Protocol):
 - **Lease expiry.** The Redis idempotency lease is 60 s. If an external call outlives it, a second attempt can start. The durable backstop is the `bookings` table's unique `(tenant_id, hotel_id, idempotency_key)` constraint (schema exists, and the uniqueness is tested against PostgreSQL). Writing bookings to that table is **not wired** yet, because the mock keeps bookings in memory.
 - **Per-process breaker.** Each replica learns about an outage separately. That delays detection by up to N failures per replica; it doesn't cause unbounded load.
 - **Modify and cancel** raise `NOT_SUPPORTED` in the mock and have no API endpoints.
+
+## Cloudbeds adapter (`RESERVATION_PROVIDER=cloudbeds`)
+
+`app/reservations/cloudbeds_provider.py` implements the interface against the documented Cloudbeds API v1.3.
+
+| Aspect | Behaviour |
+|---|---|
+| Endpoint | `GET {CLOUDBEDS_BASE_URL}/getAvailableRoomTypes` with `startDate`, `endDate`, `rooms=1`, `adults`, `children`, `propertyIDs`, `detailedRates=true` |
+| Auth | `x-api-key` header, sent per request; the key is a secret (never logged, excluded from `repr`) |
+| Hotel → property | `CLOUDBEDS_PROPERTY_IDS` (`<hotel_id>=<propertyID>`). An unmapped hotel is `INVALID_REQUEST`, not a crash |
+| Guest input | `validate_search` runs **before** any HTTP call, so past dates, inverted dates, stays over 30 nights and empty parties never reach the PMS and the guest sees the same messages as with the mock |
+| Mapping | `roomTypeID` → `room_id`, `roomTypeName` → name, `maxGuests` → max occupancy, `roomsAvailable` → rooms left, `roomRateDetailed` summed (or `roomRate` × nights) → total, `propertyCurrency[0].currencyCode` → currency, HTML stripped from descriptions |
+| Hotel content | Bed configuration, room size and breakfast inclusion are **not** PMS data. They come from the knowledge base when a room type matches by id or name; otherwise they are left empty and `breakfast_included` is `null`, so the UI shows no badge instead of a wrong claim |
+| Sold out | Room types that fit the party with `roomsAvailable = 0` are reported in `sold_out_room_names` |
+| Failures | Timeouts, transport errors, 429 and 5xx → `ConnectionError` (retried by the wrapper). 401/403 → `UNAVAILABLE` with a generic guest message, and only the status is logged. `success: false` or an unreadable body → `UNAVAILABLE`; the vendor message is logged, never shown to the guest |
+| Bookings | `create_booking`, `modify_booking` and `cancel_booking` raise `NOT_SUPPORTED`. `postReservation` requires guest name, country, postcode, email and a payment method, which this assistant deliberately does not collect ([PRIVACY.md](PRIVACY.md)). Enabling it is a product decision, not a code gap |
+
+Covered by `tests/test_cloudbeds_provider.py` (17 tests over a stub transport) and the shared contract test in `tests/test_contracts.py`. **Live verification against a Cloudbeds sandbox is a separate step; see [ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md) for its current status.**
 
 ## Adding a real adapter (checklist)
 

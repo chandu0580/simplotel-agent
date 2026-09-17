@@ -35,10 +35,12 @@ export function AvailabilityResults({ result, contactPhone, onChangeDates }: Pro
               <div className="room-card__main">
                 <h4>{room.name}</h4>
                 <p className="room-card__meta">
-                  {t('results.sleeps', { count: room.max_occupancy })} · {room.beds} · {room.size_sqm} m²
+                  {[t('results.sleeps', { count: room.max_occupancy }), room.beds, room.size_sqm ? `${room.size_sqm} m²` : '']
+                    .filter(Boolean)
+                    .join(' · ')}
                 </p>
                 <div className="room-card__badges">
-                  {room.breakfast_included ? (
+                  {room.breakfast_included === null ? null : room.breakfast_included ? (
                     <span className="badge badge--good">{t('results.breakfast')}</span>
                   ) : (
                     <span className="badge">{t('results.roomOnly')}</span>

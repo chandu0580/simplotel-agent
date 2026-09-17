@@ -9,7 +9,8 @@ export interface RoomOffer {
   beds: string
   size_sqm: number
   max_occupancy: number
-  breakfast_included: boolean
+  /** null when the source doesn't say (PMS room type without matching hotel content). */
+  breakfast_included: boolean | null
   rooms_left: number
   nightly_rate: number
   total_price: number

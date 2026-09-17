@@ -30,7 +30,8 @@ class RoomOffer(BaseModel):
     beds: str
     size_sqm: int
     max_occupancy: int
-    breakfast_included: bool
+    # None = the source doesn't say (e.g. a PMS room type with no matching hotel content): the UI shows no badge.
+    breakfast_included: bool | None = None
     rooms_left: int
     nightly_rate: int
     total_price: int

@@ -4,7 +4,7 @@ All configuration is read **once at startup** from environment variables (`Setti
 
 `Settings.validate()` runs at startup, and an invalid combination stops the process with a `ConfigError` listing every problem, so a misconfigured deployment fails fast instead of running unsafely. `backend/.env.example` lists every variable with safe defaults and is parse-tested (`test_example_env_file_parses_to_safe_defaults`).
 
-Secret-bearing values (`LLM_API_KEY`, `ANTHROPIC_API_KEY`, `ADMIN_API_TOKENS`, `REDIS_URL`, `DATABASE_URL`) are excluded from `repr(Settings)`. Their values, including passwords embedded in URLs, are registered with the log redactor (`Settings.secret_values()`).
+Secret-bearing values (`LLM_API_KEY`, `ANTHROPIC_API_KEY`, `CLOUDBEDS_API_KEY`, `ADMIN_API_TOKENS`, `REDIS_URL`, `DATABASE_URL`) are excluded from `repr(Settings)`. Their values, including passwords embedded in URLs, are registered with the log redactor (`Settings.secret_values()`).
 
 ## Environment
 
@@ -85,6 +85,17 @@ Rejected requests get 429 `RATE_LIMITED` with `Retry-After` and `details: [{"dim
 | `CONVERSATION_LOCK_WAIT_SECONDS` | `30` | How long a turn waits for the previous one before 409 `CONVERSATION_BUSY` |
 | `CONVERSATION_LOCK_LEASE_SECONDS` | `120` | Must exceed `LLM_TIMEOUT_SECONDS × (LLM_MAX_RETRIES + 1)` |
 | `PII_MASK_CONTACT_DETAILS` | `true` | Mask emails and phone numbers; card numbers are always masked ([PRIVACY.md](PRIVACY.md)) |
+
+## Reservation integration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `RESERVATION_PROVIDER` | `mock` | `mock` (demo inventory from `app/data`) \| `cloudbeds` (live availability and rates) |
+| `CLOUDBEDS_API_KEY` | — | Required for `cloudbeds`. Sent as `x-api-key`; treated as a secret (excluded from `repr`, registered with the log redactor) |
+| `CLOUDBEDS_PROPERTY_IDS` | — | Required for `cloudbeds`. `<hotel_id>=<propertyID>` pairs, comma separated |
+| `CLOUDBEDS_BASE_URL` | `https://api.cloudbeds.com/api/v1.3` | Must be `https://` |
+
+Bookings are never written to Cloudbeds: `create_booking` raises `NOT_SUPPORTED` ([RESERVATION_INTEGRATION.md](RESERVATION_INTEGRATION.md)).
 
 ## Reservation integration resilience
 

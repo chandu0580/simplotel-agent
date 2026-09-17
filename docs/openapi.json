@@ -2073,7 +2073,14 @@
             "title": "Max Occupancy"
           },
           "breakfast_included": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Breakfast Included"
           },
           "rooms_left": {
@@ -2108,7 +2115,6 @@
           "beds",
           "size_sqm",
           "max_occupancy",
-          "breakfast_included",
           "rooms_left",
           "nightly_rate",
           "total_price",

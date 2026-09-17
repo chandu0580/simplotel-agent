@@ -69,6 +69,19 @@ def build_state(settings: Settings, clock: Clock, metrics: Metrics) -> StateStor
     )
 
 
+def build_reservation_provider(settings: Settings, idempotency: IdempotencyStore) -> ReservationProvider:
+    if settings.reservation_provider == "cloudbeds":
+        from .reservations.cloudbeds_provider import CloudbedsReservationProvider, parse_property_ids  # imported only when selected
+
+        return CloudbedsReservationProvider(
+            settings.cloudbeds_api_key,  # type: ignore[arg-type]
+            parse_property_ids(settings.cloudbeds_property_ids),
+            base_url=settings.cloudbeds_base_url,
+            timeout_seconds=settings.reservation_timeout_seconds,
+        )
+    return MockReservationProvider(settings.data_dir, idempotency)
+
+
 def build_llm_provider(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "glm":
         return GLMProvider(
@@ -111,9 +124,10 @@ class Container:
         """Graceful shutdown: flush audit events, close pools and clients."""
         if self.audit is not None:
             self.audit.close()
-        closer = getattr(self.llm_provider, "close", None)
-        if callable(closer):
-            closer()
+        for component in (self.llm_provider, getattr(self.reservations, "inner", None)):
+            closer = getattr(component, "close", None)
+            if callable(closer):
+                closer()
         if self.state.redis is not None:
             self.state.redis.close()
 
@@ -153,7 +167,7 @@ def build_container(
     knowledge = JsonKnowledgeProvider(settings.data_dir, cache, settings.knowledge_cache_ttl_seconds)
     if audit is not None:
         audit.sync_tenants(tenants, knowledge)
-    inner_reservations = reservation_provider or MockReservationProvider(settings.data_dir, state.idempotency)
+    inner_reservations = reservation_provider or build_reservation_provider(settings, state.idempotency)
     reservations = ResilientReservationProvider(
         inner_reservations,
         CircuitBreaker(f"reservations:{inner_reservations.name}", settings.circuit_breaker_failures, settings.circuit_breaker_reset_seconds),

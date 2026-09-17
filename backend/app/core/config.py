@@ -107,6 +107,12 @@ class Settings:
     pii_mask_contact_details: bool = True  # card numbers are always masked
     conversation_lock_lease_seconds: float = 120.0
 
+    # Reservation integration. mock = deterministic demo inventory; cloudbeds = live PMS availability.
+    reservation_provider: str = "mock"  # mock | cloudbeds
+    cloudbeds_api_key: str | None = field(default=None, repr=False)
+    cloudbeds_base_url: str = "https://api.cloudbeds.com/api/v1.3"
+    cloudbeds_property_ids: str = ""  # hotel-goa-001=123456,hotel-blr-001=234567
+
     # Reservation integration resilience
     reservation_timeout_seconds: float = 5.0
     reservation_read_retries: int = 2
@@ -183,6 +189,10 @@ class Settings:
             conversation_lock_wait_seconds=_float(env, "CONVERSATION_LOCK_WAIT_SECONDS", 30.0),
             pii_mask_contact_details=_bool(env.get("PII_MASK_CONTACT_DETAILS"), True),
             conversation_lock_lease_seconds=_float(env, "CONVERSATION_LOCK_LEASE_SECONDS", 120.0),
+            reservation_provider=env.get("RESERVATION_PROVIDER", "mock").lower(),
+            cloudbeds_api_key=env.get("CLOUDBEDS_API_KEY") or None,
+            cloudbeds_base_url=env.get("CLOUDBEDS_BASE_URL", "https://api.cloudbeds.com/api/v1.3"),
+            cloudbeds_property_ids=env.get("CLOUDBEDS_PROPERTY_IDS", ""),
             reservation_timeout_seconds=_float(env, "RESERVATION_TIMEOUT_SECONDS", 5.0),
             reservation_read_retries=_int(env, "RESERVATION_READ_RETRIES", 2),
             circuit_breaker_failures=_int(env, "CIRCUIT_BREAKER_FAILURES", 5),
@@ -211,6 +221,15 @@ class Settings:
             errors.append("AUTH_MODE must be 'disabled' or 'static_token'")
         if not 1 <= self.worker_threads <= 1000:
             errors.append("WORKER_THREADS must be between 1 and 1000")
+        if self.reservation_provider not in ("mock", "cloudbeds"):
+            errors.append("RESERVATION_PROVIDER must be 'mock' or 'cloudbeds'")
+        if self.reservation_provider == "cloudbeds":
+            if not self.cloudbeds_api_key:
+                errors.append("RESERVATION_PROVIDER=cloudbeds requires CLOUDBEDS_API_KEY")
+            if not self.cloudbeds_property_ids.strip():
+                errors.append("RESERVATION_PROVIDER=cloudbeds requires CLOUDBEDS_PROPERTY_IDS (<hotel_id>=<propertyID>,...)")
+            if not self.cloudbeds_base_url.lower().startswith("https://"):
+                errors.append("CLOUDBEDS_BASE_URL must use https://")
         if self.state_backend not in ("memory", "redis"):
             errors.append("STATE_BACKEND must be 'memory' or 'redis'")
         if self.state_backend == "redis" and not self.redis_url:
@@ -242,7 +261,7 @@ class Settings:
 
     def secret_values(self) -> list[str]:
         """Values that must never appear in logs or responses."""
-        values = [self.anthropic_api_key or "", self.llm_api_key or ""]
+        values = [self.anthropic_api_key or "", self.llm_api_key or "", self.cloudbeds_api_key or ""]
         values += [part.split("=", 1)[0] for part in self.admin_api_tokens.split(",") if "=" in part]
         values += [urlsplit(url).password or "" for url in (self.redis_url, self.database_url) if url]
         return [v for v in values if len(v) >= 8]
