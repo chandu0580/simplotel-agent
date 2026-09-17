@@ -5,7 +5,7 @@ and otherwise returns a fallback with contact details. Availability goes through
 pipeline (validation, timeout, audit) as model-requested calls.
 """
 
-from datetime import date
+from datetime import date, timedelta
 import re
 import time
 
@@ -42,6 +42,29 @@ def is_availability_request(text: str, matches_faq: bool = False) -> bool:
     if not any(re.search(p, lowered) for p in GENERIC_AVAILABILITY_PATTERNS):
         return False
     return bool(STAY_WORDS_RE.search(lowered) or extract_dates(text)) or not matches_faq
+
+
+# Relative phrases a guest uses constantly. Only unambiguous ones are resolved; "next week" or "soon"
+# stay unresolved so the guest is asked instead of having dates invented for them.
+RELATIVE_RE = re.compile(r"\b(tonight|tomorrow|this weekend|next weekend|this coming weekend)\b", re.I)
+
+
+def resolve_relative_range(text: str, today: date) -> list[date]:
+    """Check-in/check-out for a confident relative phrase, or [] when the guest must say."""
+    match = RELATIVE_RE.search(text)
+    if not match:
+        return []
+    phrase = match.group(1).lower()
+    if phrase == "tonight":
+        return [today, today + timedelta(days=1)]
+    if phrase == "tomorrow":
+        return [today + timedelta(days=1), today + timedelta(days=2)]
+    # Weekend = Saturday night. "this weekend" is the coming Saturday (today, if today is Saturday).
+    days_to_saturday = (5 - today.weekday()) % 7
+    if phrase == "next weekend":
+        days_to_saturday += 7
+    saturday = today + timedelta(days=days_to_saturday)
+    return [saturday, saturday + timedelta(days=1)]
 
 
 def extract_party_size(text: str) -> int | None:
@@ -98,7 +121,7 @@ class OfflineAssistant:
         )
 
     def _availability(self, turn: Turn, trace: AITrace, text: str, context: BookingContext | None) -> ChatReply:
-        dates = extract_dates(text)
+        dates = extract_dates(text) or resolve_relative_range(text, turn.today)
         prefill = BookingPrefill(
             check_in=dates[0] if dates else (context.check_in if context else None),
             check_out=dates[1] if len(dates) > 1 else (context.check_out if context else None),
@@ -106,11 +129,14 @@ class OfflineAssistant:
             children=context.children if context else None,
         )
         if not (prefill.check_in and prefill.check_out and prefill.adults):
-            return ChatReply(
-                type="collect_booking_details",
-                text="I can check that for you. Please choose your check-in and check-out dates and the number of guests.",
-                booking_prefill=prefill,
-            )
+            has_dates = bool(prefill.check_in and prefill.check_out)
+            if has_dates:  # resolved from the message ("this weekend") or remembered; only the party is missing
+                text_for_guest = f"Absolutely — I can check {prefill.check_in:%a %d %b} to {prefill.check_out:%a %d %b}. How many guests will be staying?"
+            elif prefill.adults:
+                text_for_guest = "Absolutely — I can check that for you. What are your check-in and check-out dates?"
+            else:
+                text_for_guest = "I can check that for you. Please choose your check-in and check-out dates and the number of guests."
+            return ChatReply(type="collect_booking_details", text=text_for_guest, booking_prefill=prefill)
         ctx = ToolContext(tenant=turn.tenant, kb=turn.kb, today=turn.today, booking_context=context, tenant_flags=turn.tenant_flags)
         args = {"check_in": prefill.check_in.isoformat(), "check_out": prefill.check_out.isoformat(), "adults": prefill.adults, "children": prefill.children or 0}
         result = self.tools.execute("check_availability", args, ctx, invoked_by="system")

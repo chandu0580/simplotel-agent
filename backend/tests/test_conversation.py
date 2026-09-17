@@ -7,6 +7,8 @@ The guarantees under test:
 * anything with hotel substance still routes to the grounded answer.
 """
 
+from datetime import date
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -111,3 +113,61 @@ def test_small_talk_keeps_the_conversation_and_context_intact():
     assert rooms["type"] == "answer" and "Deluxe Pool View Room" in rooms["text"]
     assert availability["type"] == "availability" and availability["availability"]["adults"] == 3
     assert len(view["messages"]) == 8  # every turn, including small talk, is part of the transcript
+
+
+# ---------- Availability intent with incomplete information (deterministic engine) ----------
+
+
+def test_confident_relative_dates_are_resolved_and_ambiguous_ones_are_asked_about():
+    """"this weekend" is resolvable; "next week" is not, and dates are never invented."""
+    from app.assistant.offline import resolve_relative_range
+
+    monday = date(2026, 10, 5)
+    assert resolve_relative_range("any rooms this weekend?", monday) == [date(2026, 10, 10), date(2026, 10, 11)]
+    assert resolve_relative_range("rooms next weekend please", monday) == [date(2026, 10, 17), date(2026, 10, 18)]
+    assert resolve_relative_range("anything tomorrow?", monday) == [date(2026, 10, 6), date(2026, 10, 7)]
+    assert resolve_relative_range("a room tonight", monday) == [monday, date(2026, 10, 6)]
+    saturday = date(2026, 10, 10)
+    assert resolve_relative_range("rooms this weekend", saturday) == [saturday, date(2026, 10, 11)]  # today when today is Saturday
+    for ambiguous in ["any rooms next week?", "rooms soon", "do you have rooms available?", "rooms in December"]:
+        assert resolve_relative_range(ambiguous, monday) == []
+
+
+def test_availability_with_dates_and_party_runs_the_search_without_a_form():
+    with TestClient(create_app(container=make_container())) as client:
+        reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": "Do you have rooms this weekend for 2 adults?"}).json()["reply"]
+    assert reply["type"] == "availability"
+    assert reply["availability"]["check_in"] == "2026-10-10" and reply["availability"]["adults"] == 2
+
+
+@pytest.mark.parametrize(("message", "expected_prefill", "asks_for"), [
+    ("Do you have rooms for 3 adults?", {"adults": 3, "check_in": None}, "check-in and check-out dates"),
+    ("Do you have rooms available next weekend?", {"adults": None, "check_in": "2026-10-17"}, "How many guests"),
+    ("do you have rooms available?", {"adults": None, "check_in": None}, "dates and the number of guests"),
+])
+def test_incomplete_availability_asks_only_for_what_is_missing(message, expected_prefill, asks_for):
+    with TestClient(create_app(container=make_container())) as client:
+        reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": message}).json()["reply"]
+    assert reply["type"] == "collect_booking_details"
+    for field, value in expected_prefill.items():
+        assert reply["booking_prefill"][field] == value
+    assert asks_for in reply["text"]
+
+
+def test_progressive_conversation_greeting_to_knowledge_to_availability():
+    """The brief's target journey: small talk, then a room question, a follow-up, then availability."""
+    container = make_container()
+    with TestClient(create_app(container=container)) as client:
+        cid = conversation(client)
+        greeting = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "Hi"}).json()["reply"]
+        capability = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "How can you help me?"}).json()["reply"]
+        rooms = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "Which room is suitable for 3 adults?"}).json()["reply"]
+        breakfast = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "Does it include breakfast?"}).json()["reply"]
+        availability = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "Is it available this weekend for 3 adults?"}).json()["reply"]
+
+    assert greeting["type"] == "clarification" and capability["type"] == "clarification"
+    assert rooms["type"] == "answer" and "Deluxe Pool View Room" in rooms["text"]
+    assert breakfast["type"] == "answer" and "Breakfast" in breakfast["text"]
+    assert availability["type"] == "availability" and availability["availability"]["adults"] == 3
+    # Small talk never produced a form or a fallback along the way.
+    assert greeting["booking_prefill"] is None and capability["booking_prefill"] is None

@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from app.assistant.offline import extract_party_size, is_availability_request
@@ -48,10 +50,20 @@ def test_unknown_topic_returns_fallback_with_contact(offline, kb):
 
 
 def test_availability_without_details_asks_for_them(offline):
+    """Unresolvable dates are asked for, never guessed."""
+    reply = ask(offline, "Do you have rooms available sometime soon?")
+
+    assert reply.type == "collect_booking_details"
+    assert reply.booking_prefill.check_in is None and reply.booking_prefill.adults is None
+
+
+def test_a_confident_relative_date_is_resolved_and_only_the_party_is_asked_for(offline):
+    """"next weekend" is unambiguous, so the form opens pre-filled and asks only what is missing."""
     reply = ask(offline, "Do you have rooms available next weekend?")
 
     assert reply.type == "collect_booking_details"
-    assert reply.booking_prefill.check_in is None
+    assert (reply.booking_prefill.check_in, reply.booking_prefill.check_out) == (date(2026, 10, 17), date(2026, 10, 18))
+    assert reply.booking_prefill.adults is None and "How many guests" in reply.text
 
 
 def test_availability_with_full_details_runs_search(offline):
