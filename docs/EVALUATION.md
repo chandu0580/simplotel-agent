@@ -173,6 +173,34 @@ than a regression: the model argued about the past dates itself instead of passi
 `check_availability`, and the scenario passed 3/3 on re-run at the same revision. Offline:
 development 36/36 (critical 16/16), holdout 12/12.
 
+#### Scenario sweep before submission (prompt revision 8)
+
+A live sweep of ~60 real turns against GLM 5.2 (small talk, identity, every knowledge topic, unknown
+facts, local-area questions, draft content, off-topic, availability including relative, past, sold-out,
+over-long and over-capacity searches, prompt injection, payment and PII, typos, emoji, multi-question
+turns and Hindi) found four defects, all now fixed with regression tests:
+
+1. One small-talk reply answered several different questions. "Can I ask something?" and "brooh?" both
+   got "All good here, thanks!". The intent is split into `how_are_you`, `may_i_ask` and `banter`.
+2. "Who are you?" / "Are you a real person?" returned the capability list. There is now an `identity`
+   intent that says plainly it is an AI assistant, not a member of staff.
+3. "Is breakfast included in that room?" was replaced by "I couldn't confirm that price from our hotel
+   information". The breakfast supplement lives in the dining entry while the answer cited only the
+   room, so the price guard treated a published figure as invented. An amount the answer did not cite is
+   now looked up in the published knowledge base: if an entry carries it, that entry is added as a source
+   (`price_source_added`); if none does, the fallback stands, so fabricated figures are still blocked.
+4. Replies could contain `[phone number removed]`. Assistant turns were PII-masked when history was
+   rebuilt, so the hotel's own published number was masked in front of the model, which then copied the
+   placeholder. Only guest turns are masked now.
+
+A fifth issue was a wording problem rather than a bug: declining an action the assistant cannot perform
+(hold a room, take card details, apply a discount) used the "couldn't find a reliable answer" fallback
+text. Revision 8 asks the model to decline in one sentence and hand over to the front desk.
+
+Live GLM 5.2 after the fixes: development **42/42**, critical 16/16, decision accuracy 17/17,
+groundedness 13/13, p50 2560 ms (`evals/results/glm-rev8.md`); holdout **12/12**, critical 10/10.
+Offline: development 36/36, holdout 12/12.
+
 ## E. Holdout suite
 
 **What it is.** `backend/evals/holdout.json`: 12 adversarial scenarios written **after** prompt and guardrail development. Select it with `--suite holdout`; the development suite (`evals/scenarios.json`) is the default.

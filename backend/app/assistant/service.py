@@ -87,7 +87,13 @@ class AssistantService:
         # place masking happens; ConversationService stores the masked request.message afterwards.
         masked = self.minimise(request.message)
         request.message = masked.text
-        request.history = [item.model_copy(update={"content": self.minimise(item.content).text}) for item in request.history]
+        # Only what the guest wrote. Assistant turns were produced after masking, so they carry no guest
+        # data - but they do carry the hotel's own published phone and email, and masking those put
+        # "[phone number removed]" in front of the model, which then copied it into the next reply.
+        request.history = [
+            item if item.role == "assistant" else item.model_copy(update={"content": self.minimise(item.content).text})
+            for item in request.history
+        ]
         ctx = request.tenant
         trace = AITrace(
             trace_id=ctx.trace_id if ctx.trace_id != "-" else uuid.uuid4().hex,

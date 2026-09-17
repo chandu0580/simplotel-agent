@@ -24,10 +24,15 @@ BASE = f"/api/v1/hotels/{GOA}"
 
 GREETINGS = ["hi", "Hi!", "hello", "Hello there", "hey", "good morning", "Good evening!", "namaste", "hi 👋"]
 CAPABILITY = ["how can you help me?", "What can you do?", "what can I ask you?", "What do you help with?",
-              "what information do you have?", "Can you help me?", "Tell me what you can do.", "who are you?"]
+              "what information do you have?", "Can you help me?", "Tell me what you can do.", "how do you work?"]
 THANKS = ["thanks", "Thank you!", "thx", "great", "perfect", "okay", "ok", "got it", "that's helpful"]
 GOODBYE = ["bye", "Goodbye!", "see you", "take care", "good night"]
-SMALLTALK = ["how are you?", "How are u", "what's up", "can I ask something?", "can I ask you a question?", "nice to meet you", "are you there?", "brooh?", "hey bro"]
+# Pleasantries, split by what the guest actually asked: one canned reply for all of them answered
+# "can I ask something?" with "All good here, thanks!" (found in live testing).
+HOW_ARE_YOU = ["how are you?", "How are u", "how's it going?"]
+MAY_I_ASK = ["can I ask something?", "can I ask you a question?", "may I ask a question", "quick question"]
+BANTER = ["what's up", "nice to meet you", "are you there?", "brooh?", "hey bro"]
+IDENTITY = ["who are you?", "are you a bot?", "are you a real person?", "am I talking to a human?"]
 OFF_TOPIC = ["what is python?", "What is the weather tomorrow?", "what's the stock price of TCS?", "tell me a joke", "write me a poem", "who won the cricket world cup?"]
 # Double-checking the assistant, not asking the hotel anything (from manual testing).
 CONFIRM = ["are you sure?", "Are you sure?!", "you sure?", "really?", "is that correct?", "how do you know?"]
@@ -42,7 +47,10 @@ HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you h
     *[(m, "capability") for m in CAPABILITY],
     *[(m, "thanks") for m in THANKS],
     *[(m, "goodbye") for m in GOODBYE],
-    *[(m, "smalltalk") for m in SMALLTALK],
+    *[(m, "how_are_you") for m in HOW_ARE_YOU],
+    *[(m, "may_i_ask") for m in MAY_I_ASK],
+    *[(m, "banter") for m in BANTER],
+    *[(m, "identity") for m in IDENTITY],
     *[(m, "off_topic") for m in OFF_TOPIC],
     *[(m, "confirm") for m in CONFIRM],
     ("are you sure breakfast is included?", None),  # carries a real question: normal routing answers it
@@ -67,7 +75,8 @@ def conversation(client):
     ("how can you help me?", "rooms, amenities, breakfast"),
     ("what can you do?", "room availability"),
     ("how are you?", "All good here"),
-    ("can I ask you a question?", "All good here"),
+    ("can I ask you a question?", "go ahead"),
+    ("who are you?", "virtual guest assistant"),
     ("thanks", "You're welcome"),
     ("bye", "Thank you for visiting"),
 ])
@@ -98,12 +107,29 @@ def test_greeting_and_capability_offer_starter_suggestions_but_thanks_does_not()
     assert thanks["suggestions"] == []
 
 
-@pytest.mark.parametrize("message", [*GREETINGS[:3], *CAPABILITY[:3], *SMALLTALK[:3], *THANKS[:3], *GOODBYE[:2], *HOTEL_QUESTIONS])
+@pytest.mark.parametrize("message", [*GREETINGS[:3], *CAPABILITY[:3], *HOW_ARE_YOU[:2], *MAY_I_ASK[:2], *BANTER[:2], *IDENTITY[:2], *THANKS[:3], *GOODBYE[:2], *HOTEL_QUESTIONS])
 def test_the_booking_form_never_opens_for_small_talk_or_hotel_questions(message):
     """The availability form belongs to the availability intent only (offline engine: deterministic routing)."""
     with TestClient(create_app(container=make_container())) as client:
         reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": message}).json()["reply"]
     assert reply["type"] != "collect_booking_details" and reply["booking_prefill"] is None, reply["text"][:120]
+
+
+@pytest.mark.parametrize(("message", "must_contain", "must_not_contain"), [
+    ("can I ask something?", "go ahead", "All good here"),   # answering "how are you" to a different question
+    ("brooh?", "I'm here", "All good here"),
+    ("how are you?", "All good here", "go ahead"),
+    ("who are you?", "not a member of staff", "I can help with rooms, amenities"),
+    ("are you a real person?", "an AI", "I can help with rooms, amenities"),
+])
+def test_each_pleasantry_answers_what_was_actually_asked(message, must_contain, must_not_contain):
+    """One canned small-talk reply answered several different questions with "All good here, thanks!"."""
+    with TestClient(create_app(container=make_container())) as client:
+        reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": message}).json()["reply"]
+
+    assert reply["type"] == "clarification"
+    assert must_contain in reply["text"], reply["text"]
+    assert must_not_contain not in reply["text"], reply["text"]
 
 
 @pytest.mark.parametrize("message", ["do you have rooms available?", "I want to check room availability", "any rooms free next week?"])

@@ -90,6 +90,29 @@ def test_fabricated_price_is_blocked_but_real_price_passes(fake_messages):
     assert genuine.reply.type == "answer" and "21,000" in genuine.reply.text
 
 
+def test_a_published_price_the_answer_forgot_to_cite_is_cited_rather_than_discarded(fake_messages):
+    """Found in live testing: "is breakfast included in that room?" became "I couldn't confirm that price".
+
+    The breakfast supplement lives in the dining entry, but the answer cited only the room, so the price
+    check treated INR 650 as unsupported and replaced a correct answer with a front-desk escalation.
+    """
+    container = make_container(fake_messages)
+    fake_messages.responses.append(
+        answer_response({
+            "type": "answer",
+            "text": "Breakfast is not included with the Garden Standard Room, but it can be added for INR 650 per adult per day.",
+            "source_ids": ["rooms.garden-standard"],
+            "suggestions": [],
+        })
+    )
+
+    outcome = handle(container, "is breakfast included in the garden standard room?")
+
+    assert outcome.reply.type == "answer" and "650" in outcome.reply.text
+    assert [s.id for s in outcome.reply.sources] == ["rooms.garden-standard", "amenities.dining"]
+    assert outcome.trace.guardrails == ["price_source_added"]
+
+
 def test_booking_tool_cannot_be_called_by_the_model(fake_messages):
     container = make_container(fake_messages, feature_flags={"booking_tools_enabled": True})
     fake_messages.responses.append(tool_response("create_booking", {"room_id": "ocean-villa", "check_in": "2026-10-07", "check_out": "2026-10-08", "adults": 2, "children": 0}))

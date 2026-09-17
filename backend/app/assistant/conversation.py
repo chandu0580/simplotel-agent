@@ -25,7 +25,9 @@ from typing import Literal
 from ..knowledge.models import KnowledgeBase
 from ..schemas import ChatReply
 
-ConversationalIntent = Literal["greeting", "capability", "smalltalk", "thanks", "goodbye", "confirm", "off_topic"]
+ConversationalIntent = Literal[
+    "greeting", "capability", "identity", "how_are_you", "may_i_ask", "banter", "thanks", "goodbye", "confirm", "off_topic"
+]
 
 # Any hotel subject in the message means it is a real question, not small talk.
 HOTEL_SUBJECT = re.compile(
@@ -66,15 +68,27 @@ _GREETING = re.compile(r"^(hi+|hey+|hello+|hola|yo|namaste|namaskar|greetings|go
 _CAPABILITY = re.compile(
     r"\b(how\s+(can|could|do)\s+you\s+help|what\s+(can|could)\s+you\s+(do|help)|what\s+can\s+i\s+ask|what\s+do\s+you\s+(do|help|know)|"
     r"what\s+(kind\s+of\s+)?(information|info)\s+do\s+you\s+have|can\s+you\s+help(\s+me)?|tell\s+me\s+what\s+you\s+can\s+do|"
-    r"who\s+are\s+you|what\s+are\s+you|are\s+you\s+(a\s+)?(bot|human|ai|real)|how\s+do\s+you\s+work|what\s+is\s+this)\b",
+    r"how\s+do\s+you\s+work|what\s+is\s+this)\b",
     re.I,
 )
-# Everyday pleasantries and filler that are neither greeting nor capability question.
-_SMALLTALK = re.compile(
-    r"\b(how\s+are\s+you|how\s+are\s+u|how'?s\s+it\s+going|how\s+do\s+you\s+do|hope\s+you'?re\s+well|"
-    r"are\s+you\s+(there|ok|okay|fine|busy)|can\s+i\s+ask\s+(you\s+)?(something|a\s+question|anything)|"
-    r"may\s+i\s+ask|nice\s+to\s+meet\s+you|good\s+to\s+see\s+you|what'?s\s+up|sup|"
-    r"bro+h*|bruh|dude|buddy|boss|mate)\b",
+# "Who am I talking to?" deserves a straight answer, not a list of topics - and the honest answer
+# includes that this is an assistant, not a member of staff.
+_IDENTITY = re.compile(
+    r"\b(who\s+are\s+you|what\s+are\s+you|are\s+you\s+(a\s+)?(bot|robot|human|person|ai|real|machine)|"
+    r"am\s+i\s+talking\s+to\s+(a\s+)?(bot|human|person|robot)|is\s+this\s+a\s+(bot|human|person|robot)|"
+    r"are\s+you\s+a\s+real\s+(person|human))\b",
+    re.I,
+)
+# Three kinds of pleasantry that used to share one reply.
+_HOW_ARE_YOU = re.compile(r"\b(how\s+are\s+(you|u)|how'?s\s+it\s+going|how\s+do\s+you\s+do|hope\s+you'?re\s+well|how\s+have\s+you\s+been)\b", re.I)
+_MAY_I_ASK = re.compile(
+    r"\b(can\s+i\s+ask\s+(you\s+)?(something|a\s+question|anything|one\s+thing)|may\s+i\s+ask|"
+    r"quick\s+question|i\s+have\s+a\s+question|got\s+a\s+question|can\s+i\s+ask)\b",
+    re.I,
+)
+_BANTER = re.compile(
+    r"\b(are\s+you\s+(there|ok|okay|fine|busy|awake)|nice\s+to\s+meet\s+you|good\s+to\s+see\s+you|"
+    r"what'?s\s+up|what\s+is\s+up|sup|bro+h*|bruh|dude|buddy|boss|mate|yaar)\b",
     re.I,
 )
 _THANKS = re.compile(r"^(thanks?|thank\s+you|thanks\s+a\s+lot|thx|ty|cheers|great|perfect|awesome|excellent|nice|cool|lovely|ok|okay|okey|k|alright|"
@@ -110,10 +124,16 @@ def classify(text: str) -> ConversationalIntent | None:
         return None  # carries a real question: let the normal routing answer it
     if _CONFIRM.search(cleaned):
         return "confirm"
+    if _IDENTITY.search(cleaned):
+        return "identity"
     if _CAPABILITY.search(cleaned):
         return "capability"
-    if _SMALLTALK.search(cleaned):
-        return "smalltalk"
+    if _HOW_ARE_YOU.search(cleaned):
+        return "how_are_you"
+    if _MAY_I_ASK.search(cleaned):
+        return "may_i_ask"
+    if _BANTER.search(cleaned):
+        return "banter"
     if _GOODBYE.match(cleaned):
         return "goodbye"
     if _GREETING.match(cleaned):
@@ -133,7 +153,11 @@ def reply_for(intent: ConversationalIntent, kb: KnowledgeBase, suggestions: list
             "I can help with rooms, amenities, breakfast, check-in and check-out, hotel policies "
             "and room availability. What would you like to know?"
         ),
-        "smalltalk": f"All good here, thanks! What can I help you with at {hotel}?",
+        # An assistant claiming to be a person is the one thing a guest must never be told.
+        "identity": f"I'm the virtual guest assistant for {hotel} \u2014 an AI, not a member of staff. I can answer questions about your stay from the hotel's own information.",
+        "how_are_you": f"All good here, thanks! What can I help you with at {hotel}?",
+        "may_i_ask": "Of course \u2014 go ahead. What would you like to know about your stay?",
+        "banter": f"I'm here! What can I help you with at {hotel}?",
         "thanks": "You're welcome! Anything else about your stay?",
         "goodbye": f"Thank you for visiting {hotel} — have a lovely stay! 🌴",
         # States no hotel fact: it describes where answers come from, which is true of every answer.
@@ -142,5 +166,5 @@ def reply_for(intent: ConversationalIntent, kb: KnowledgeBase, suggestions: list
         "off_topic": f"That's outside what I can help with — I'm the guest assistant for {hotel}. Ask me about rooms, amenities, policies or availability.",
     }
     # Starter chips help when the guest hasn't asked anything useful yet; after "thanks" or "bye" they'd be pushy.
-    with_chips = intent in ("greeting", "capability", "smalltalk", "off_topic")
+    with_chips = intent in ("greeting", "capability", "identity", "how_are_you", "may_i_ask", "banter", "off_topic")
     return ChatReply(type="clarification", text=texts[intent], suggestions=suggestions if with_chips else [])

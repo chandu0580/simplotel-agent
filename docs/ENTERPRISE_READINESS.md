@@ -61,14 +61,14 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Check | Result |
 |---|---|
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
-| Backend pytest without services (CI `backend` job equivalent) | **439 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
+| Backend pytest without services (CI `backend` job equivalent) | **460 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
 | Frontend Vitest | **29 passed** (landing page and conversation) |
 | Playwright E2E (desktop + mobile, AI disabled) | **14 passed** |
 | Offline eval, development suite | **36/36** (6 AI-only skipped; 42 scenarios incl. 6 conversational), critical 16/16, no regressions vs baseline |
 | Offline eval, holdout suite | **12/12**, critical 10/10 |
-| GLM 5.2 live, development suite (runtime evidence, not Claude) | **41/42**, critical 16/16, groundedness 14/14, p50 2.3 s (`evals/results/glm-rev7`). The single failure is a flaky scenario, not a regression: `availability-past-date` passed 3/3 on re-run at the same prompt revision |
-| GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/glm-5.2-holdout-run1`) |
+| GLM 5.2 live, development suite (runtime evidence, not Claude) | **42/42**, critical 16/16, decision accuracy 17/17, groundedness 13/13, p50 2.6 s (`evals/results/glm-rev8`) |
+| GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/holdout-ai`) |
 | Load test (local, not capacity) | 0% errors at 10–100 users in all scenarios; see [PERFORMANCE.md](PERFORMANCE.md) |
 | Secret scans | 0 findings: tracked files, frontend bundle |
 | Anthropic live API | **NOT VERIFIED — no Anthropic credential** |

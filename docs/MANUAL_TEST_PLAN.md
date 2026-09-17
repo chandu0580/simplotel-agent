@@ -71,6 +71,9 @@ Open the conversation first (http://localhost:5173/#chat or **Chat with assistan
 | B0b | Quick action | Click **Breakfast** | The question "Is breakfast included?" is sent as if typed; the landing gives way to the conversation and a grounded answer appears | | | |
 | B0c | Small talk | Type "hi", then "how can you help me?", then "thanks" | Natural replies: a welcome, a list of what the assistant covers, and "You're welcome". **Never** "I couldn't find a reliable answer", and **no availability form** | | | |
 | B0d | Double-checking | After any answer, type "are you sure?" | A short confirmation explaining answers come from the hotel's information. **Never** "I couldn't find a reliable answer" and **no front-desk contacts** | | | |
+| B0e | Who am I talking to | "who are you?" then "are you a real person?" | Says it is the virtual guest assistant for the property and an **AI, not a member of staff**. Not the list of topics | | | |
+| B0f | Permission to ask | "can I ask something?" | "Of course — go ahead…", not "All good here, thanks!" | | | |
+| B0g | Cannot do that | "hold a room for me and charge my card" | One sentence saying it cannot make bookings or take card details, then the front desk. **Never** "I couldn't find a reliable answer", and no `[phone number removed]` placeholders | | | |
 | B1 | Check-in time | Type "What time is check-in?" and send | Loading indicator, then an answer saying **from 2:00 PM**. A source chip (check-in/out timings) is shown | | | |
 | B2 | Check-out time | "When do I need to check out?" | **By 11:00 AM**; may mention late check-out until 2 PM at INR 1,500 | | | |
 | B3 | Breakfast | "Is breakfast included?" | States it depends on the room: included for Deluxe, Family Suite, Ocean Villa; **not** for Garden Standard (INR 650/adult/day). Doesn't claim "yes" for all rooms | | | |

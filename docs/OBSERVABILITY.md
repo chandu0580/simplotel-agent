@@ -70,7 +70,7 @@ One trace per guest turn, recorded even when the turn raises.
 | `evidence_ids` | Entries retrieved (AI mode uses full context, so all entries) |
 | `cited_ids` | Sources cited in the final reply after guardrails |
 | `tool_calls` | List of `ToolCallRecord`: `name`, `status` (`ok`/`error`), `latency_ms`, `error_code`, `invoked_by`, `arguments` (validated args, **read-only tools only**) |
-| `guardrails` | Interventions: `input_blocked`, `secret_leak`, `prompt_leak`, `unknown_source`, `uncited_answer`, `availability_claim`, `unsupported_price`, `unsupported_claim` (model-written form message with a price or inventory claim) |
+| `guardrails` | Interventions: `input_blocked`, `secret_leak`, `prompt_leak`, `unknown_source`, `uncited_answer`, `availability_claim`, `unsupported_price`, `price_source_added` (a published entry carrying the quoted figure was added as a source), `unsupported_claim` (model-written form message with a price or inventory claim) |
 | `input_flags` | Input detections: `ignore_instructions`, `role_override`, `policy_override`, `tool_coercion`, `prompt_tag_injection`, `exfiltration_attempt` |
 | `pii_masked` | Kinds of personal data masked in the guest message before it reached the model, storage and the trace: `card`, `email`, `phone` (sorted, de-duplicated). Kinds only, never the values |
 | `stop_reason` | `end_turn`, `tool_use`, `max_tokens`, `refusal`, `other` |

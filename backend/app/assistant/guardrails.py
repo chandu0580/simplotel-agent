@@ -153,8 +153,19 @@ class OutputGuardrails:
             allowed: set[int] = set(quoted_prices or ())
             for entry in cited:
                 allowed |= numbers_in(entry.content)
-            if amounts - allowed:
-                return GuardrailOutcome(self._safe_fallback(kb, "I couldn't confirm that price from our hotel information."), triggered + ["unsupported_price"])
+            # An amount the answer didn't cite is either *under-cited* or invented, and the two deserve
+            # different treatment. A guest asking "is breakfast included in that room?" gets an answer
+            # about the room that quotes the breakfast supplement from the dining entry; discarding it as
+            # an unconfirmed price told the guest we had nothing, which is worse than the citation gap.
+            # So: if a published entry carries the figure, cite that entry and keep the answer. If none
+            # does, the figure came from the model, and the fallback stands.
+            for amount in sorted(amounts - allowed):
+                source = next((e for e in kb.entries if amount in numbers_in(e.content)), None)
+                if source is None:
+                    return GuardrailOutcome(self._safe_fallback(kb, "I couldn't confirm that price from our hotel information."), triggered + ["unsupported_price"])
+                if source.id not in {s.id for s in sources}:
+                    sources.append(Source(id=source.id, title=source.title))
+                    triggered.append("price_source_added")
 
         if reply_type == "fallback" and kb.hotel.phone not in text:
             text = f"{text} Our front desk can help 24/7: {kb.contact_line()}."

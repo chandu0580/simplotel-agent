@@ -84,6 +84,27 @@ def test_legacy_history_is_minimised_too():
     assert all("4111" not in str(r.messages) for r in provider.requests)
 
 
+def test_the_hotels_own_contacts_survive_in_the_history_the_model_sees(fake_messages):
+    """Masking assistant turns put "[phone number removed]" in front of the model, which copied it.
+
+    Guest turns are still masked; assistant turns are generated after masking, so they carry no guest
+    data - only the hotel's own published phone and email, which the next reply may legitimately repeat.
+    """
+    container = make_container(fake_messages)
+    fake_messages.responses.append(answer_response({"type": "fallback", "text": "Please call +91 832 555 0142.", "source_ids": [], "suggestions": []}))
+    fake_messages.responses.append(answer_response({"type": "answer", "text": "Check-in is from 2:00 PM.", "source_ids": ["timings.check_in_out"], "suggestions": []}))
+
+    with TestClient(create_app(container=container)) as client:
+        cid = client.post(f"{BASE}/conversations", json={}).json()["conversation_id"]
+        client.post(f"{BASE}/conversations/{cid}/messages", json={"message": f"my card is {CARD_NUMBER}, is there a helipad?"})
+        client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "what time is check-in?"})
+
+    history = str(fake_messages.calls[1]["messages"])
+    assert "+91 832 555 0142" in history, "the hotel's own number must reach the model intact"
+    assert "phone number removed" not in history
+    assert "4111" not in history  # the guest's card is still masked
+
+
 def test_deleted_conversation_is_gone_and_cannot_be_written_again():
     container = make_container()
     with TestClient(create_app(container=container)) as client:
