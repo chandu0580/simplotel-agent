@@ -27,6 +27,7 @@ CAPABILITY = ["how can you help me?", "What can you do?", "what can I ask you?",
               "what information do you have?", "Can you help me?", "Tell me what you can do.", "who are you?"]
 THANKS = ["thanks", "Thank you!", "thx", "great", "perfect", "okay", "ok", "got it", "that's helpful"]
 GOODBYE = ["bye", "Goodbye!", "see you", "take care", "good night"]
+SMALLTALK = ["how are you?", "How are u", "what's up", "can I ask something?", "can I ask you a question?", "nice to meet you", "are you there?"]
 HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you have a pool?", "what is the cancellation policy?",
                    "Which room is suitable for 3 guests?", "hi, is breakfast included?", "thanks, what about parking?"]
 
@@ -36,6 +37,7 @@ HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you h
     *[(m, "capability") for m in CAPABILITY],
     *[(m, "thanks") for m in THANKS],
     *[(m, "goodbye") for m in GOODBYE],
+    *[(m, "smalltalk") for m in SMALLTALK],
     *[(m, None) for m in HOTEL_QUESTIONS],
     ("do you have rooms available?", None),
     ("what is the weather in Goa?", None),
@@ -51,10 +53,12 @@ def conversation(client):
 
 @pytest.mark.parametrize("ai_enabled", [False, True])
 @pytest.mark.parametrize(("message", "must_contain"), [
-    ("hi", "Welcome to The Palm Grove Resort"),
-    ("good morning", "Welcome to The Palm Grove Resort"),
-    ("how can you help me?", "Room availability"),
-    ("what can you do?", "Breakfast and dining"),
+    ("hi", "welcome to The Palm Grove Resort"),
+    ("good morning", "welcome to The Palm Grove Resort"),
+    ("how can you help me?", "rooms, amenities, breakfast"),
+    ("what can you do?", "room availability"),
+    ("how are you?", "All good here"),
+    ("can I ask you a question?", "All good here"),
     ("thanks", "You're welcome"),
     ("bye", "Thank you for visiting"),
 ])
@@ -66,6 +70,7 @@ def test_small_talk_is_answered_without_the_model_or_a_knowledge_fallback(ai_ena
 
     reply = body["reply"]
     assert reply["type"] == "clarification" and must_contain in reply["text"]
+    assert len(reply["text"]) <= 170, f"conversational replies stay short: {reply['text']!r}"
     assert "couldn't find" not in reply["text"] and "don't have reliable information" not in reply["text"]
     assert reply["booking_prefill"] is None and reply["availability"] is None
     assert provider.requests == []  # no tokens spent on small talk
@@ -84,7 +89,7 @@ def test_greeting_and_capability_offer_starter_suggestions_but_thanks_does_not()
     assert thanks["suggestions"] == []
 
 
-@pytest.mark.parametrize("message", [*GREETINGS[:3], *CAPABILITY[:3], *THANKS[:3], *GOODBYE[:2], *HOTEL_QUESTIONS])
+@pytest.mark.parametrize("message", [*GREETINGS[:3], *CAPABILITY[:3], *SMALLTALK[:3], *THANKS[:3], *GOODBYE[:2], *HOTEL_QUESTIONS])
 def test_the_booking_form_never_opens_for_small_talk_or_hotel_questions(message):
     """The availability form belongs to the availability intent only (offline engine: deterministic routing)."""
     with TestClient(create_app(container=make_container())) as client:

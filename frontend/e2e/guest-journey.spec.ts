@@ -98,11 +98,12 @@ test('conversational questions never open the availability form, but asking for 
   const log = page.getByRole('log', { name: 'Conversation' })
 
   await ask(page, 'hi')
-  await expect(log.getByText(/Welcome to The Palm Grove Resort/)).toBeVisible()
+  await expect(log.getByText(/welcome to The Palm Grove Resort/i)).toBeVisible()
   await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
 
   await ask(page, 'How can you help me?')
-  await expect(log.getByText(/Room availability/)).toBeVisible()
+  // The suggestion chip carries the same words, so assert on the assistant's own reply.
+  await expect(log.getByText(/I can help with rooms, amenities/)).toBeVisible()
   await expect(log.getByText(/couldn't find|don't have reliable information/)).toHaveCount(0)
   await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
 

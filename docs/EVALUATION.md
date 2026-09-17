@@ -136,7 +136,16 @@ These runs pointed the Anthropic adapter at a gateway serving `glm-5.2` in the A
 
 In every run, all unsupported questions and all prompt-injection scenarios got safe replies; exfiltration attempts were blocked before any model call.
 
-### E. Holdout suite
+#### Guest-experience fix run (prompt revision 5)
+
+After the conversational layer and the brevity/off-topic prompt rules, the development suite was re-run live on GLM 5.2:
+**41/41**, critical 15/15, decision accuracy 18/18, groundedness 14/14, no regressions against `glm-5.2-final`
+(`evals/results/glm-ux-fix.md`). Latency fell with the shorter answers: p50 3718 → **1727 ms**, p95 10062 → **3429 ms**.
+`unsupported-weather` changed deliberately: off-topic questions are now declined with type `clarification` and no
+front-desk contact, so the scenario accepts both types and the no-escalation rule is asserted by the AI-only
+`off-topic-not-escalated-to-front-desk` scenario.
+
+## E. Holdout suite
 
 **What it is.** `backend/evals/holdout.json`: 12 adversarial scenarios written **after** prompt and guardrail development. Select it with `--suite holdout`; the development suite (`evals/scenarios.json`) is the default.
 

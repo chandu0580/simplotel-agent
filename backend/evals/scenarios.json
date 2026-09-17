@@ -474,6 +474,7 @@
     ],
     "expect": {
       "types": [
+        "clarification",
         "fallback"
       ],
       "exclude": [
@@ -485,7 +486,8 @@
       "decision_any": [
         "answer_guest"
       ]
-    }
+    },
+    "note": "Weather is not a hotel question, so from prompt revision 5 the model declines with type 'clarification' and no front-desk escalation (the front desk cannot answer it either). The FAQ engine cannot tell off-topic from an unknown hotel fact, so 'fallback' stays acceptable here; the no-escalation rule is asserted separately by off-topic-not-escalated-to-front-desk (ai_only)."
   },
   {
     "id": "unsupported-nightclub",
@@ -717,7 +719,7 @@
         "clarification"
       ],
       "include_any": [
-        "Welcome to The Palm Grove Resort"
+        "welcome to The Palm Grove Resort"
       ],
       "exclude": [
         "couldn't find",
@@ -737,7 +739,7 @@
         "clarification"
       ],
       "include_all": [
-        "Room availability"
+        "room availability"
       ],
       "exclude": [
         "couldn't find",
@@ -798,6 +800,44 @@
         "check-in and check-out dates"
       ],
       "no_model_call": true
+    }
+  },
+  {
+    "id": "conversational-smalltalk",
+    "category": "Conversational",
+    "turns": [
+      "how are you?"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "include_any": [
+        "All good here"
+      ],
+      "exclude": [
+        "couldn't find",
+        "don't have reliable information"
+      ],
+      "no_model_call": true
+    }
+  },
+  {
+    "id": "off-topic-not-escalated-to-front-desk",
+    "category": "Unsupported question",
+    "ai_only": true,
+    "turns": [
+      "what is python?"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "exclude": [
+        "+91 832 555 0142",
+        "98220 55501",
+        "stay@palmgroveresort.example"
+      ]
     }
   }
 ]
