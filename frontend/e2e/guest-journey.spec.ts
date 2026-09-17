@@ -70,3 +70,47 @@ test('asks for booking details when availability is requested without dates', as
   await ask(page, 'Do you have rooms available?')
   await expect(page.getByRole('form', { name: 'Check availability' })).toBeVisible()
 })
+
+test('landing: quick action answers, follow-up keeps context', async ({ page }) => {
+  await page.goto('/')
+
+  // Landing state: value proposition, quick actions and examples, with the input ready.
+  await expect(page.getByText('Your stay, made easier')).toBeVisible()
+  const actions = page.getByRole('group', { name: 'Quick actions' })
+  await expect(actions.getByRole('button', { name: /Rooms/ })).toBeVisible()
+  await expect(page.getByLabel('Ask a question')).toBeEnabled()
+
+  await actions.getByRole('button', { name: /Breakfast/ }).click()
+
+  const log = page.getByRole('log', { name: 'Conversation' })
+  // The same text also appears as a suggestion chip once the answer arrives, so target the guest's bubble.
+  await expect(log.getByText('Is breakfast included?').first()).toBeVisible()
+  await expect(log.getByText(/Deluxe Pool View Room/).first()).toBeVisible() // grounded breakfast answer
+  await expect(page.getByText('Your stay, made easier')).toHaveCount(0) // landing gave way to the conversation
+
+  await ask(page, 'Which room is best for 3 guests?')
+  await expect(log.getByText(/Deluxe Pool View Room|Family Suite/).last()).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
+})
+
+test('conversational questions never open the availability form, but asking for rooms does', async ({ page }) => {
+  await page.goto('/')
+  const log = page.getByRole('log', { name: 'Conversation' })
+
+  await ask(page, 'hi')
+  await expect(log.getByText(/Welcome to The Palm Grove Resort/)).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
+
+  await ask(page, 'How can you help me?')
+  await expect(log.getByText(/Room availability/)).toBeVisible()
+  await expect(log.getByText(/couldn't find|don't have reliable information/)).toHaveCount(0)
+  await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
+
+  await ask(page, 'thanks')
+  await expect(log.getByText(/You're welcome/)).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Check availability' })).toHaveCount(0)
+
+  // Availability intent: the form appears.
+  await ask(page, 'Do you have rooms available?')
+  await expect(page.getByRole('form', { name: 'Check availability' })).toBeVisible()
+})

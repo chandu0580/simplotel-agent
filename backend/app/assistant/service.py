@@ -21,8 +21,10 @@ from ..knowledge.provider import KnowledgeProvider
 from ..schemas import ChatReply
 from ..tenancy import TenantRegistry
 from .agent import AIAssistant
+from .conversation import classify as classify_conversational
+from .conversation import reply_for as conversational_reply
 from .guardrails import InputGuardrails
-from .offline import OfflineAssistant
+from .offline import DEFAULT_SUGGESTIONS, OfflineAssistant
 from .turn import DependencyUnavailable, LLMError, Turn, TurnRequest
 
 logger = logging.getLogger("hotel_assistant.service")
@@ -132,6 +134,13 @@ class AssistantService:
             trace.mode = "guardrail"
             trace.guardrails.append("input_blocked")
             return TurnOutcome(verdict.reply, display_mode, None, trace)
+
+        # Small talk is answered deterministically: no retrieval, no model call, no tools, and the same
+        # behaviour whether or not AI is enabled. Anything with hotel substance falls through (app.assistant.conversation).
+        if intent := classify_conversational(turn.message):
+            trace.mode = "conversational"
+            trace.intent = intent
+            return TurnOutcome(conversational_reply(intent, turn.kb, DEFAULT_SUGGESTIONS), display_mode, None, trace)
 
         try:
             if not ai_available:

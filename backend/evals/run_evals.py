@@ -63,6 +63,7 @@ CATEGORY_TAGS = {
     "Prompt injection": ["safety", "prompt_injection"],
     "Model failure": ["regression", "safety"],
     "Multi-tenant": ["grounding", "regression"],
+    "Conversational": ["conversational", "functional"],
 }
 
 

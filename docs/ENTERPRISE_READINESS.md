@@ -33,6 +33,7 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Timeouts | IMPLEMENTED + TESTED | LLM HTTP timeouts close the connection (real slow server); tool and integration timeouts; retry deadline below tool timeout | Timed-out Python threads are not cancelled (documented; mutations rely on idempotency) |
 | Error model | IMPLEMENTED + TESTED | Stable codes and envelope, `meta.degradation`, no stack traces (`tests/test_errors.py`: 422, 404, 405, 413, 503 knowledge, 500 hidden detail, degradation per failure kind) | — |
 | Rate limiting | IMPLEMENTED + TESTED | ip_burst and ip in the HTTP middleware for every `/api/` request (unknown routes and invalid bodies count), then tenant, hotel, conversation; 429 + Retry-After; shared across instances when Redis is used (tested in-process) | Fails open when Redis is down (deliberate); no API-key dimension |
+| Conversational routing | IMPLEMENTED + TESTED | Greetings, capability questions, thanks and goodbye are answered deterministically before retrieval or any model call, in both AI and FAQ mode; the booking form opens only for availability intent (`app/assistant/conversation.py`, `tests/test_conversation.py`, 5 eval scenarios) | Small talk outside these four intents still goes to the model or the FAQ engine |
 | Security test suite | IMPLEMENTED + TESTED | Guardrail, injection, exfiltration, tool-authorization, cross-tenant, error and privacy tests; holdout adversarial evals (offline 12/12, GLM 12/12, critical 10/10) | Penetration test; live-model red teaming beyond 12 holdout scenarios |
 | Secret hygiene | IMPLEMENTED + TESTED | `scripts/scan_secrets.py`: tracked files 0 findings, frontend bundle 0, eval results 0; settings `repr` and log redaction tests | Scanner not yet run in GitHub CI |
 | Security headers | IMPLEMENTED + TESTED (API) / NOT IMPLEMENTED (static hosting) | Backend sets nosniff, DENY, no-referrer, `Cache-Control: no-store` on `/api`, HSTS in production (`app/api/middleware.py`). `test_security_headers_request_ids_and_trace_propagation` asserts `X-Content-Type-Options`, `X-Frame-Options` and `Cache-Control`; `Referrer-Policy` and HSTS are set in code but not asserted by a test | CSP, Permissions-Policy and HSTS for the built SPA are a hosting requirement ([DEPLOYMENT.md](DEPLOYMENT.md)) |
@@ -40,14 +41,14 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Retention and deletion | IMPLEMENTED + TESTED | Conversation TTL (memory and Redis), DELETE → 404 thereafter, DB retention job under RLS | Retention job not scheduled; log retention not configured |
 | Observability | IMPLEMENTED + TESTED | Access logs and traces carry request, trace, tenant, hotel and conversation ids; latency breakdown; metrics asserted to move (`tests/test_observability.py`) | Log shipping, dashboards, alerting, trace export not deployed |
 | Performance evidence | IMPLEMENTED + TESTED | `perf/load_test.py` at 10/25/50/100 users, 0% errors; thread-pool bottleneck found and relieved ([PERFORMANCE.md](PERFORMANCE.md)) | Local benchmark only; no multi-worker, Redis-backed or real-model load test |
-| Evaluation gates | IMPLEMENTED + TESTED | 34-scenario development suite, 12-scenario holdout, critical flag, `--fail-on-critical` (exit 4), `--baseline` (exit 3); offline 28/28 (critical 14/14) | Larger dataset from real traffic; LLM-judge grading |
+| Evaluation gates | IMPLEMENTED + TESTED | 39-scenario development suite, 12-scenario holdout, critical flag, `--fail-on-critical` (exit 4), `--baseline` (exit 3); offline 28/28 (critical 14/14) | Larger dataset from real traffic; LLM-judge grading |
 | CI (standard) | IMPLEMENTED + NOT VERIFIED | `ci.yml`: backend (ruff, pytest, offline eval gate, pip-audit), security (secret scan, no committed `.env`), frontend (oxlint, tsc + build, Vitest, bundle secret scan, npm audit), e2e (Playwright). No Docker needed. Every step was run locally, not as a workflow | First run on GitHub |
 | CI (live AI eval) | IMPLEMENTED + NOT VERIFIED | `live-ai-eval.yml`: manual, provider choice, protected secrets, sanitised inputs | First run; environment secrets |
 | Docker / containerization | NOT REQUIRED FOR CURRENT PROJECT | Removed intentionally (Dockerfiles, compose, nginx edge, container-only scripts and CI jobs) | — (not a gap) |
 | Graceful shutdown | IMPLEMENTED + TESTED (lifespan) | FastAPI lifespan flushes audit events and closes clients (`Container.close`, exercised whenever a test client exits; audit flush asserted in the PostgreSQL tests) | SIGTERM draining under uvicorn not measured in the current setup; readiness does not flip to draining |
 | Migrations | IMPLEMENTED + TESTED | Ordered, transactional, checksummed, advisory-locked; run with `python -m app.db.migrate` (optional PostgreSQL only; tested locally once, not in CI) | Rollback strategy (forward-only by design) |
 | Configuration and flags | IMPLEMENTED + TESTED | Startup validation incl. HTTPS, mock and lease rules; unknown flags fail startup ([CONFIGURATION.md](CONFIGURATION.md)) | Runtime flag changes; secret manager |
-| Frontend resilience | IMPLEMENTED + TESTED | 19 Vitest tests incl. busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 6/6 (desktop + mobile) | Full screen-reader audit |
+| Frontend resilience | IMPLEMENTED + TESTED | 24 Vitest tests incl. landing quick actions, busy retry, 503, unexpected bodies, abort timeout, 413, long content; Playwright 10/10 (desktop + mobile) | Full screen-reader audit |
 | Admin authentication | DESIGNED | `AuthProvider` boundary; default refuses with 401 `UNAUTHORIZED` | OIDC/JWT NOT IMPLEMENTED |
 | Guest authentication | NOT IMPLEMENTED | Booking tools require a principal that nothing issues | Identity provider integration |
 | Semantic retrieval | NOT IMPLEMENTED | Flag fails startup if enabled | Only if knowledge outgrows the prompt |
@@ -60,11 +61,11 @@ Evidence below comes from automated tests, one local run of the optional Redis a
 | Check | Result |
 |---|---|
 | Backend pytest with the optional Redis 7.4 + PostgreSQL 17 services (run locally once, before Docker removal) | **292 passed** |
-| Backend pytest without services (CI `backend` job equivalent; release-candidate audit) | **275 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
+| Backend pytest without services (CI `backend` job equivalent) | **369 passed, 22 skipped** (optional Redis/PostgreSQL integration tests) |
 | Lint / types | ruff clean; oxlint clean; `tsc -b` clean |
-| Frontend Vitest | **19 passed** |
-| Playwright E2E (desktop + mobile, AI disabled) | **6 passed** |
-| Offline eval, development suite | **28/28** (6 AI-only skipped), critical 14/14, no regressions vs baseline |
+| Frontend Vitest | **24 passed** |
+| Playwright E2E (desktop + mobile, AI disabled) | **10 passed** |
+| Offline eval, development suite | **33/33** (6 AI-only skipped; 39 scenarios incl. 5 conversational), critical 14/14, no regressions vs baseline |
 | Offline eval, holdout suite | **12/12**, critical 10/10 |
 | GLM 5.2 live, development suite (runtime evidence, not Claude) | **34/34**, critical 14/14, decision accuracy 18/18, groundedness 14/14, p50 3.7 s / p95 10.1 s, no regressions vs adapter run 2 (`evals/results/glm-5.2-final`) |
 | GLM 5.2 live, holdout suite | **12/12**, critical 10/10 (`evals/results/glm-5.2-holdout-run1`) |

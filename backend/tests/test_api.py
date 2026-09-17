@@ -374,7 +374,7 @@ def test_offline_mode_when_ai_not_configured(offline_client):
 def test_unexpected_exception_returns_structured_500(ai_client, fake_messages):
     fake_messages.responses.append(RuntimeError("boom"))
 
-    response = ai_client.post("/api/chat", json={"message": "hello"})
+    response = ai_client.post("/api/chat", json={"message": "what time is check-in?"})
 
     assert response.status_code == 500
     body = response.json()

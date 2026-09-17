@@ -52,7 +52,8 @@ class AITrace:
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
-    mode: str | None = None  # ai | offline | guardrail
+    mode: str | None = None  # ai | offline | guardrail | conversational
+    intent: str | None = None  # conversational intents only (greeting, capability, thanks, goodbye)
     fallback_used: bool = False
     fallback_reason: str | None = None
     reply_type: str | None = None

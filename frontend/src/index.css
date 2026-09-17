@@ -314,6 +314,111 @@ a {
   background: var(--primary-soft);
 }
 
+/* ---------- Landing (shown until the first question) ---------- */
+
+.landing {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px 20px 24px;
+  text-align: center;
+}
+
+.landing__eyebrow {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.landing__title {
+  margin: 0;
+  font-size: 1.65rem;
+  line-height: 1.2;
+  color: var(--primary);
+}
+
+.landing__subtitle {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.landing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.quick-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.quick-action:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.landing__examples {
+  margin-top: 6px;
+  width: 100%;
+}
+
+.landing__examples-label {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.landing__examples ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  .landing {
+    padding: 20px 14px;
+    gap: 14px;
+  }
+
+  .landing__title {
+    font-size: 1.35rem;
+  }
+
+  .landing__actions {
+    gap: 8px;
+  }
+
+  .quick-action {
+    font-size: 0.88rem;
+    padding: 10px 12px;
+  }
+}
+
 /* ---------- Buttons ---------- */
 
 .btn {

@@ -27,8 +27,6 @@ interface Props {
   pending: boolean
   hotel: HotelInfo | null
   today: string
-  welcomeText: string
-  welcomeSuggestions: string[]
   onSuggestion: (text: string) => void
   onRetry: (errorId: string) => void
   onOpenBookingForm: () => void
@@ -36,7 +34,7 @@ interface Props {
 }
 
 export function MessageList(props: Props) {
-  const { messages, pending, hotel, today, welcomeText, welcomeSuggestions, onSuggestion, onRetry, onOpenBookingForm, onCheckAvailability } = props
+  const { messages, pending, hotel, today, onSuggestion, onRetry, onOpenBookingForm, onCheckAvailability } = props
   const { t } = useI18n()
   const endRef = useRef<HTMLDivElement>(null)
   const lastAssistantId = [...messages].reverse().find((m) => m.kind === 'assistant')?.id
@@ -63,13 +61,6 @@ export function MessageList(props: Props) {
 
   return (
     <div className="messages" role="log" aria-live="polite" aria-busy={pending} aria-label={t('conversation.label')} tabIndex={0}>
-      <div className="bubble-row">
-        <div className="bubble bubble--assistant">
-          <p className="bubble__text">{welcomeText}</p>
-        </div>
-        {messages.length === 0 && !pending && welcomeSuggestions.length > 0 && suggestionChips(welcomeSuggestions)}
-      </div>
-
       {messages.map((message) => {
         if (message.kind === 'user') {
           return (

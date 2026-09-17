@@ -278,7 +278,8 @@ describe('Availability flow', () => {
     renderApp()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: /Check availability/ }))
+    // Two entry points now carry this label: the landing quick action and the composer button.
+    await user.click(within(screen.getByRole('group', { name: 'Quick actions' })).getByRole('button', { name: /Check availability/ }))
     const form = await screen.findByRole('form', { name: 'Check availability' })
     fireEvent.change(within(form).getByLabelText('Check-in'), { target: { value: '2026-10-09' } })
     fireEvent.change(within(form).getByLabelText('Check-out'), { target: { value: '2026-10-08' } })
@@ -337,7 +338,10 @@ describe('Localisation, branding and connectivity', () => {
   it('shows hotel branding from the API', async () => {
     mockApi({})
     renderApp()
-    expect(await screen.findByText("Hi! I'm Palm Grove Assistant for The Palm Grove Resort. Ask me about rooms, amenities and policies, or check room availability for your dates.")).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'The Palm Grove Resort' })).toBeInTheDocument()
+    expect(screen.getByText('Guest Assistant · Rooms, amenities & availability')).toBeInTheDocument()
+    // The landing repeats the property name above the value proposition.
+    expect(await screen.findByText('Your stay, made easier')).toBeInTheDocument()
   })
 
   it('announces when the guest goes offline', async () => {
@@ -432,5 +436,92 @@ describe('Hardening against API failures and unexpected responses', () => {
     await ask('Breakfast?')
 
     expect(await screen.findByText((content) => content.startsWith('Breakfast details.'))).toBeInTheDocument()
+  })
+})
+
+describe('Landing experience and conversational routing', () => {
+  it('opens on a welcome screen with quick actions, examples and a usable input', async () => {
+    mockApi({})
+    renderApp()
+
+    expect(await screen.findByText('Your stay, made easier')).toBeInTheDocument()
+    const actions = screen.getByRole('group', { name: 'Quick actions' })
+    expect(within(actions).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      '🛏Rooms',
+      '🍳Breakfast',
+      '🏊Amenities',
+      '📅Check availability',
+      '📋Policies',
+    ])
+    expect(screen.getByRole('button', { name: 'What time is check-in?' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Ask a question')).toBeEnabled() // the guest can type straight away
+    expect(screen.queryByRole('form', { name: 'Check availability' })).not.toBeInTheDocument()
+  })
+
+  it('sends the matching question when a quick action is used and then shows the conversation', async () => {
+    const calls = mockApi({ messages: [() => json(200, turn({ text: 'Breakfast is included in the Deluxe rate.' }))] })
+    renderApp()
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: /Breakfast/ }))
+
+    expect(await screen.findByText('Breakfast is included in the Deluxe rate.')).toBeInTheDocument()
+    expect(messageCalls(calls)[0].body).toMatchObject({ message: 'Is breakfast included?' })
+    expect(screen.queryByText('Your stay, made easier')).not.toBeInTheDocument() // landing gives way to the conversation
+    expect(screen.getByText('Is breakfast included?')).toBeInTheDocument() // the guest's question is shown
+  })
+
+  it('opens the availability form only from the explicit quick action', async () => {
+    mockApi({})
+    renderApp()
+    const user = userEvent.setup()
+
+    await user.click(within(screen.getByRole('group', { name: 'Quick actions' })).getByRole('button', { name: /Check availability/ }))
+
+    expect(await screen.findByRole('form', { name: 'Check availability' })).toBeInTheDocument()
+  })
+
+  it('never shows the availability form for greetings or capability questions', async () => {
+    const calls = mockApi({
+      messages: [
+        () => json(200, turn({ type: 'clarification', text: 'Hello! Welcome to The Palm Grove Resort. 👋' })),
+        () => json(200, turn({ type: 'clarification', text: 'I can help with rooms, amenities, breakfast, policies and availability.' })),
+      ],
+    })
+    renderApp()
+
+    const user = await ask('hi')
+    expect(await screen.findByText(/Welcome to The Palm Grove Resort/)).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Ask a question'), 'how can you help me?')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText(/I can help with rooms/)).toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: 'Check availability' })).not.toBeInTheDocument()
+    expect(messageCalls(calls)).toHaveLength(2) // both went to the backend as ordinary turns
+  })
+
+  it('keeps context across a conversational turn and a follow-up', async () => {
+    const calls = mockApi({
+      messages: [
+        () => json(200, turn({ text: 'The Deluxe Pool View Room sleeps 3 guests.' })),
+        () => json(200, turn({ type: 'clarification', text: "You're welcome! Let me know if there's anything else." })),
+        () => json(200, turn({ text: 'Yes, breakfast is included for the Deluxe Pool View Room.' })),
+      ],
+    })
+    renderApp()
+
+    const user = await ask('Which room is suitable for 3 guests?')
+    await screen.findByText('The Deluxe Pool View Room sleeps 3 guests.')
+    await user.type(screen.getByLabelText('Ask a question'), 'thanks')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    await screen.findByText(/You're welcome/)
+    await user.type(screen.getByLabelText('Ask a question'), 'does it include breakfast?')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByText(/breakfast is included for the Deluxe Pool View Room/)).toBeInTheDocument()
+    const sent = messageCalls(calls).map((c) => (c.body as { message: string }).message)
+    expect(sent).toEqual(['Which room is suitable for 3 guests?', 'thanks', 'does it include breakfast?'])
+    // One server-side conversation throughout: the client never restarts it after small talk.
+    expect(new Set(calls.filter((c) => c.path.endsWith('/conversations')).map((c) => c.path)).size).toBe(1)
   })
 })

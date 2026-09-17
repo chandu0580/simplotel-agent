@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { api } from './api/client'
 import type { HotelInfo } from './api/types'
 import { Composer } from './components/Composer'
+import { Landing } from './components/Landing'
 import { MessageList } from './components/MessageList'
 import { formatShortDate, partyLabel, toISODate } from './format'
 import { useChat } from './hooks/useChat'
@@ -10,8 +11,6 @@ import { useI18n } from './i18n/context'
 import { LOCALE_NAMES, SUPPORTED_LOCALES, type Locale } from './i18n/messages'
 
 const DEFAULT_HOTEL_NAME = 'The Palm Grove Resort'
-const DEFAULT_ASSISTANT_NAME = 'the virtual assistant'
-const DEFAULT_SUGGESTIONS = ['What time is check-in?', 'Is breakfast included?', 'Check room availability']
 
 export default function App() {
   const { t, locale, setLocale, dateLocale } = useI18n()
@@ -25,7 +24,6 @@ export default function App() {
   }, [])
 
   const hotelName = hotel?.hotel.name ?? DEFAULT_HOTEL_NAME
-  const assistantName = hotel?.hotel.brand.assistant_name ?? DEFAULT_ASSISTANT_NAME
   const today = hotel?.today ?? toISODate(new Date())
   const languages = SUPPORTED_LOCALES.filter((l) => (hotel?.hotel.languages ?? ['en']).includes(l))
   const brandStyle = hotel ? ({ '--primary': hotel.hotel.brand.primary_color } as CSSProperties) : undefined
@@ -39,7 +37,7 @@ export default function App() {
           </div>
           <div className="chat__title">
             <h1>{hotelName}</h1>
-            <p>{hotel ? `${assistantName} · ${hotel.hotel.tagline}` : t('header.fallbackTagline')}</p>
+            <p>{t('header.purpose')}</p>
           </div>
           {languages.length > 1 && (
             <label className="language">
@@ -66,13 +64,14 @@ export default function App() {
           </p>
         )}
 
+        {chat.messages.length === 0 && !chat.pending ? (
+          <Landing hotel={hotel} onAsk={chat.send} onOpenBookingForm={() => chat.openBookingForm(t('form.prompt'))} />
+        ) : (
         <MessageList
           messages={chat.messages}
           pending={chat.pending}
           hotel={hotel}
           today={today}
-          welcomeText={t('welcome', { assistant: assistantName, hotel: hotelName })}
-          welcomeSuggestions={DEFAULT_SUGGESTIONS}
           onSuggestion={chat.send}
           onRetry={chat.retry}
           onOpenBookingForm={() => chat.openBookingForm(t('form.prompt'))}
@@ -81,6 +80,7 @@ export default function App() {
             return chat.checkAvailability(formId, details, summary, t('form.userSummary', { summary }))
           }}
         />
+        )}
 
         <Composer pending={chat.pending} onSend={chat.send} onOpenBookingForm={() => chat.openBookingForm(t('form.prompt'))} />
         <p className="disclaimer">{t('disclaimer')}</p>

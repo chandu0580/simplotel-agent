@@ -705,5 +705,99 @@
         "11:00 AM"
       ]
     }
+  },
+  {
+    "id": "conversational-greeting",
+    "category": "Conversational",
+    "turns": [
+      "hi"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "include_any": [
+        "Welcome to The Palm Grove Resort"
+      ],
+      "exclude": [
+        "couldn't find",
+        "don't have reliable information"
+      ],
+      "no_model_call": true
+    }
+  },
+  {
+    "id": "conversational-capability",
+    "category": "Conversational",
+    "turns": [
+      "how can you help me?"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "include_all": [
+        "Room availability"
+      ],
+      "exclude": [
+        "couldn't find",
+        "don't have reliable information"
+      ],
+      "no_model_call": true
+    }
+  },
+  {
+    "id": "conversational-thanks",
+    "category": "Conversational",
+    "turns": [
+      "What time is check-in?",
+      "thanks"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "include_any": [
+        "You're welcome"
+      ],
+      "exclude": [
+        "couldn't find",
+        "don't have reliable information"
+      ],
+      "no_model_call": true
+    }
+  },
+  {
+    "id": "conversational-goodbye",
+    "category": "Conversational",
+    "turns": [
+      "bye"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "include_any": [
+        "Thank you for visiting"
+      ],
+      "no_model_call": true
+    }
+  },
+  {
+    "id": "conversational-does-not-open-booking-form",
+    "category": "Conversational",
+    "turns": [
+      "how can you help me?"
+    ],
+    "expect": {
+      "types": [
+        "clarification"
+      ],
+      "exclude": [
+        "choose your check-in",
+        "check-in and check-out dates"
+      ],
+      "no_model_call": true
+    }
   }
 ]

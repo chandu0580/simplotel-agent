@@ -27,7 +27,14 @@ export default defineConfig({
       command: `${python} -m uvicorn app.main:app --port ${BACKEND_PORT}`,
       cwd: '../backend',
       url: `http://127.0.0.1:${BACKEND_PORT}/api/health`,
-      env: { AI_ENABLED: useAI ? 'true' : 'false', LOG_LEVEL: 'WARNING' },
+      env: {
+        AI_ENABLED: useAI ? 'true' : 'false',
+        LOG_LEVEL: 'WARNING',
+        // Both browser projects drive this one backend from one IP, far faster than a real guest.
+        // Limits stay on (so a bug that spams the API still shows up) but well above the harness's rate.
+        RATE_LIMIT_IP_PER_MINUTE: '600',
+        RATE_LIMIT_IP_BURST: '200',
+      },
       reuseExistingServer: false,
       timeout: 60_000,
     },

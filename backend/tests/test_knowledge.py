@@ -77,7 +77,7 @@ def test_unpublished_content_is_not_in_the_prompt(fake_messages):
     container = make_container(fake_messages)
     fake_messages.responses.append(answer_response({"type": "clarification", "text": "Hello!", "source_ids": [], "suggestions": []}))
 
-    container.assistant.handle(turn_request(container, "hi"))
+    container.assistant.handle(turn_request(container, "what is the cancellation policy?"))
 
     system_prompt = fake_messages.calls[0]["system"][0]["text"]
     assert "Skyline rooftop bar" not in system_prompt and "Monsoon offer" not in system_prompt
