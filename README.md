@@ -1,14 +1,74 @@
-# Hotel Guest Assistant
+<div align="center">
 
-A multi-tenant AI guest assistant for hotel websites. Guests ask about the property, rooms, amenities and policies, and check live availability, all in one conversation. Answers are grounded in each hotel's own knowledge base. Dates, capacity, inventory and prices are always computed by deterministic code, never by the model.
+# 🌴 Hotel Guest Assistant
 
-The project began as a take-home assignment for Simplotel and has since been evolved into an **enterprise architecture foundation**: a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation and optional shared-state adapters (Redis, PostgreSQL) behind interfaces. It is **not a production deployment**. [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what was added later.
+**An AI concierge for hotel websites.** Guests ask about rooms, amenities and policies and check live
+availability in one conversation. Every answer is grounded in that hotel's own knowledge base, and
+dates, capacity, inventory and prices are computed by deterministic code - never by the model.
+
+[![CI](https://github.com/chandu0580/simplotel-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/chandu0580/simplotel-agent/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)
+
+</div>
+
+![The landing page of the demo hotel](docs/images/landing.png)
+
+## See it work
+
+The guest asks a question, follows up without repeating themselves, and gets live prices. The answer
+cites the knowledge entries it came from; the room cards come from the availability tool, not the model.
+
+![A conversation with a follow-up and live availability results](docs/images/conversation.png)
+
+<table>
+<tr>
+<td width="55%" valign="top">
+
+### What makes it more than a chatbot
+
+- **Grounded Q&A.** Every answer cites knowledge-base entries. Uncited answers, fabricated prices,
+  inventory claims and prompt or secret leakage are blocked before the guest sees them.
+- **Deterministic where it matters.** The model decides *when* to search; code validates the dates and
+  computes capacity, inventory and price. The model cannot invent a room or a rate.
+- **Real conversations.** History and booking context live on the server, so "what about 3 adults?" and
+  "is it available next weekend?" resolve correctly.
+- **Graceful degradation.** If the model times out, a deterministic FAQ engine answers and the turn
+  reports `meta.degradation`. If reservations are down, the guest gets a safe reply, never false
+  availability.
+- **Multi-tenant.** Every request is scoped to a tenant and hotel; two demo properties prove isolation.
+- **Evaluated, not vibes.** 42 development scenarios plus a 12-scenario adversarial holdout suite, with
+  a regression gate against committed baselines.
+
+</td>
+<td width="45%" valign="top">
+
+<img src="docs/images/mobile.png" alt="The landing page on a phone" width="100%">
+
+</td>
+</tr>
+</table>
 
 ## Status
 
+This is a take-home assignment for Simplotel, evolved into an **enterprise architecture foundation**:
+a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation
+and optional shared-state adapters behind interfaces. It is **not a production deployment**, and the
+table below is deliberate about which parts are verified.
+[docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what
+was added later.
+
+<details>
+<summary><b>Capability status</b> (implemented · optional · prototype · designed · not verified)</summary>
+
+<br>
+
 | | |
 |---|---|
-| **Implemented and tested** | Guest chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, PII masking before the model, offline fallback, GLM and Anthropic provider adapters, AI traces, metrics, structured logs, rate limiting, idempotency and conversation locks (in-memory by default), admin RBAC boundary, i18n |
+| **Implemented and tested** | Guest landing page and chat UI, v1 conversation API, multi-tenancy, knowledge lifecycle, deterministic availability, tool framework with authorization, guardrails, PII masking before the model, offline fallback, GLM and Anthropic provider adapters, AI traces, metrics, structured logs, rate limiting, idempotency and conversation locks (in-memory by default), admin RBAC boundary, i18n |
 | **Optional adapters** (behind interfaces) | Redis state adapter (conversations, rate limits, idempotency, locks) and PostgreSQL adapter (migrations, row-level security, audit sink, retention). Integration tests in `backend/tests/integration` were verified locally once against Redis 7.4 and PostgreSQL 17; they skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set and are not run in CI. |
 | **Prototype** (single process, per-process or mock) | In-memory state backend (the default), per-process knowledge and availability cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
@@ -18,6 +78,8 @@ The project began as a take-home assignment for Simplotel and has since been evo
 | **CI** | Workflows are defined; **neither has been run on GitHub**. |
 
 Test totals and the full verification record: [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md).
+
+</details>
 
 ## Features
 
