@@ -27,7 +27,7 @@ from ..llm.router import ModelRouter, ModelTask
 from ..schemas import AvailabilityResult, ChatReply
 from ..tools.base import ToolContext, ToolErrorCode, ToolRegistry
 from ..tools.builtin import NeedsDetails
-from .guardrails import OutputGuardrails, neutralise_prompt_tags
+from .guardrails import OutputGuardrails, neutralise_prompt_tags, numbers_in
 from .prompts import ANSWER_TOOL, LANGUAGE_NAMES, PROMPT_VERSION, render_system_prompt, tool_schema_version
 from .turn import DependencyUnavailable, LLMError, Turn
 
@@ -60,6 +60,12 @@ def build_messages(turn: Turn) -> list[LLMMessage]:
             f"check_in={ctx.check_in or 'unknown'}, check_out={ctx.check_out or 'unknown'}, "
             f"adults={ctx.adults if ctx.adults is not None else 'unknown'}, "
             f"children={ctx.children if ctx.children is not None else 'unknown'}."
+        )
+    if request.recent_offers:
+        lines.append(
+            "Prices the guest was shown for those dates (accurate; use these instead of knowledge-base rates): "
+            + "; ".join(request.recent_offers)
+            + "."
         )
     if request.locale and request.locale != "en":
         lines.append(f"Reply language: {LANGUAGE_NAMES.get(request.locale, request.locale)} (locale {request.locale}).")
@@ -158,7 +164,10 @@ class AIAssistant:
         except ValidationError as exc:
             raise LLMError("invalid_output", f"Model sent an invalid answer: {exc.error_count()} errors") from exc
         price_check = self.tools.flags.is_enabled("guardrail_price_check_enabled", turn.tenant_flags)
-        outcome = self.guardrails.check_answer(turn.kb, parsed.type, parsed.text, parsed.source_ids, parsed.suggestions, price_check)
+        # Prices the guest was already quoted by a real search are as trustworthy as the knowledge base;
+        # everything else must come from the entries the answer cites, so invented figures are still blocked.
+        shown = numbers_in(" ".join(turn.request.recent_offers)) if turn.request.recent_offers else None
+        outcome = self.guardrails.check_answer(turn.kb, parsed.type, parsed.text, parsed.source_ids, parsed.suggestions, price_check, shown)
         trace.guardrails += outcome.triggered
         trace.cited_ids = [s.id for s in outcome.reply.sources]
         return outcome.reply

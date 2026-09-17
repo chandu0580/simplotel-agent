@@ -2,12 +2,13 @@
 
 A guest assistant is not a search box: "hi", "how can you help?", "how are you?", "thanks" and "bye"
 are part of a normal conversation and must never be answered with "I couldn't find that in our hotel
-information".
+information". Requests that have nothing to do with the stay ("what is python?") must be declined
+politely — and without the front-desk number, because the front desk cannot answer them either.
 
-These intents are handled here, before any retrieval, model call or tool:
+These intents are handled here, before any retrieval, model call, tool or output guardrail:
 
 * they are cheap and deterministic (no tokens, no latency),
-* they behave identically whether AI is enabled or not,
+* they behave identically whether AI is enabled or not, and cannot vary between runs,
 * they keep one voice, instead of the model improvising a persona ("I'm doing great! 😊"),
 * they assert no hotel facts, so nothing can be hallucinated.
 
@@ -24,7 +25,7 @@ from typing import Literal
 from ..knowledge.models import KnowledgeBase
 from ..schemas import ChatReply
 
-ConversationalIntent = Literal["greeting", "capability", "smalltalk", "thanks", "goodbye"]
+ConversationalIntent = Literal["greeting", "capability", "smalltalk", "thanks", "goodbye", "off_topic"]
 
 # Any hotel subject in the message means it is a real question, not small talk.
 HOTEL_SUBJECT = re.compile(
@@ -36,6 +37,22 @@ HOTEL_SUBJECT = re.compile(
     re.I,
 )
 
+# Subjects a hotel assistant should simply decline. Deliberately narrow and unambiguous: a match means
+# the guest is not asking about the stay, so the reply must not escalate to the front desk. Anything not
+# listed keeps the normal routing, including its front-desk fallback for unknown hotel facts.
+_OFF_TOPIC = re.compile(
+    r"\b(python|javascript|typescript|programm\w+|coding|source\s+code|software|algorithm|"
+    r"weather|forecast|"
+    r"stock\s+price|share\s+price|crypto|bitcoin|sensex|nifty|"
+    r"election|politics|president|prime\s+minister|"
+    r"cricket|football|match\s+score|world\s+cup|"
+    r"capital\s+of|meaning\s+of\s+life|"
+    r"write\s+(me\s+)?(a\s+)?(poem|essay|song|story|code)|tell\s+me\s+a\s+joke|"
+    r"solve\s+this|homework|translate\s+this|"
+    r"medical\s+advice|legal\s+advice)\b",
+    re.I,
+)
+
 _GREETING = re.compile(r"^(hi+|hey+|hello+|hola|yo|namaste|namaskar|greetings|good\s+(morning|afternoon|evening|day))\b", re.I)
 _CAPABILITY = re.compile(
     r"\b(how\s+(can|could|do)\s+you\s+help|what\s+(can|could)\s+you\s+(do|help)|what\s+can\s+i\s+ask|what\s+do\s+you\s+(do|help|know)|"
@@ -43,11 +60,12 @@ _CAPABILITY = re.compile(
     r"who\s+are\s+you|what\s+are\s+you|are\s+you\s+(a\s+)?(bot|human|ai|real)|how\s+do\s+you\s+work|what\s+is\s+this)\b",
     re.I,
 )
-# Everyday pleasantries that are neither greeting nor capability question.
+# Everyday pleasantries and filler that are neither greeting nor capability question.
 _SMALLTALK = re.compile(
     r"\b(how\s+are\s+you|how\s+are\s+u|how'?s\s+it\s+going|how\s+do\s+you\s+do|hope\s+you'?re\s+well|"
     r"are\s+you\s+(there|ok|okay|fine|busy)|can\s+i\s+ask\s+(you\s+)?(something|a\s+question|anything)|"
-    r"may\s+i\s+ask|nice\s+to\s+meet\s+you|good\s+to\s+see\s+you|what'?s\s+up|sup)\b",
+    r"may\s+i\s+ask|nice\s+to\s+meet\s+you|good\s+to\s+see\s+you|what'?s\s+up|sup|"
+    r"bro+h*|bruh|dude|buddy|boss|mate)\b",
     re.I,
 )
 _THANKS = re.compile(r"^(thanks?|thank\s+you|thanks\s+a\s+lot|thx|ty|cheers|great|perfect|awesome|excellent|nice|cool|lovely|ok|okay|okey|k|alright|"
@@ -66,7 +84,7 @@ def _is_whole_message(pattern: re.Pattern[str], cleaned: str) -> bool:
 
 
 def classify(text: str) -> ConversationalIntent | None:
-    """The intent when the message is *only* small talk, otherwise None."""
+    """The intent when the message is only small talk or clearly off-topic, otherwise None."""
     cleaned = _normalise(text)
     if not cleaned or len(cleaned.split()) > 12:
         return None
@@ -75,6 +93,10 @@ def classify(text: str) -> ConversationalIntent | None:
     for pattern, intent in ((_GOODBYE, "goodbye"), (_THANKS, "thanks"), (_GREETING, "greeting")):
         if _is_whole_message(pattern, cleaned):
             return intent  # type: ignore[return-value]
+    # Clearly off-topic is decided before the hotel-subject veto, so "what's the weather tomorrow?" is
+    # declined rather than escalated just because it mentions "tomorrow".
+    if _OFF_TOPIC.search(cleaned):
+        return "off_topic"
     if HOTEL_SUBJECT.search(cleaned):
         return None  # carries a real question: let the normal routing answer it
     if _CAPABILITY.search(cleaned):
@@ -103,7 +125,9 @@ def reply_for(intent: ConversationalIntent, kb: KnowledgeBase, suggestions: list
         "smalltalk": f"All good here, thanks! What can I help you with at {hotel}?",
         "thanks": "You're welcome! Anything else about your stay?",
         "goodbye": f"Thank you for visiting {hotel} — have a lovely stay! 🌴",
+        # No front-desk contact on purpose: the front desk cannot answer this either.
+        "off_topic": f"That's outside what I can help with — I'm the guest assistant for {hotel}. Ask me about rooms, amenities, policies or availability.",
     }
-    # Starter chips help when the guest hasn't asked anything yet; after "thanks" or "bye" they'd be pushy.
-    with_chips = intent in ("greeting", "capability", "smalltalk")
+    # Starter chips help when the guest hasn't asked anything useful yet; after "thanks" or "bye" they'd be pushy.
+    with_chips = intent in ("greeting", "capability", "smalltalk", "off_topic")
     return ChatReply(type="clarification", text=texts[intent], suggestions=suggestions if with_chips else [])

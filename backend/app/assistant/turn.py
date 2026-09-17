@@ -14,6 +14,7 @@ class TurnRequest:
     message: str
     history: list[ChatHistoryItem] = field(default_factory=list)
     booking_context: BookingContext | None = None
+    recent_offers: list[str] = field(default_factory=list)
     locale: str | None = None
 
 

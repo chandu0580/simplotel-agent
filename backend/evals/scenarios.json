@@ -474,20 +474,19 @@
     ],
     "expect": {
       "types": [
-        "clarification",
-        "fallback"
+        "clarification"
       ],
       "exclude": [
         "°",
         "sunny",
         "rain expected",
-        "forecast is"
-      ],
-      "decision_any": [
-        "answer_guest"
+        "forecast is",
+        "+91 832 555 0142",
+        "98220 55501",
+        "stay@palmgroveresort.example"
       ]
     },
-    "note": "Weather is not a hotel question, so from prompt revision 5 the model declines with type 'clarification' and no front-desk escalation (the front desk cannot answer it either). The FAQ engine cannot tell off-topic from an unknown hotel fact, so 'fallback' stays acceptable here; the no-escalation rule is asserted separately by off-topic-not-escalated-to-front-desk (ai_only)."
+    "note": "Weather is not a hotel question. Since the off-topic intent is decided deterministically before the model (app/assistant/conversation.py), this is a short 'clarification' with no front-desk escalation in both AI and FAQ mode. It used to expect 'fallback' with contacts."
   },
   {
     "id": "unsupported-nightclub",
@@ -825,7 +824,6 @@
   {
     "id": "off-topic-not-escalated-to-front-desk",
     "category": "Unsupported question",
-    "ai_only": true,
     "turns": [
       "what is python?"
     ],
@@ -833,10 +831,34 @@
       "types": [
         "clarification"
       ],
+      "include_any": [
+        "outside what I can help with"
+      ],
       "exclude": [
         "+91 832 555 0142",
         "98220 55501",
         "stay@palmgroveresort.example"
+      ],
+      "no_model_call": true
+    },
+    "note": "Found in manual testing: the model sometimes answered off-topic questions without citations, and the uncited-answer guardrail replaced the reply with a fallback carrying the front-desk contacts."
+  },
+  {
+    "id": "unsupported-casino-still-escalates",
+    "category": "Unsupported question",
+    "note": "Guards the other side of the off-topic change: unknown *hotel* facts still reach the front desk.",
+    "turns": [
+      "Do you have a bowling alley?"
+    ],
+    "expect": {
+      "types": [
+        "fallback"
+      ],
+      "include_all": [
+        "+91 832 555 0142"
+      ],
+      "exclude": [
+        "Yes, we"
       ]
     }
   }

@@ -81,7 +81,7 @@ LLM providers: the default runtime provider is GLM (`glm-5.2`) through an OpenAI
 4. **Resolve the turn.** Tenant flags are read, "today" is computed in the hotel's time zone, and the knowledge snapshot for that date is loaded (published entries in their effective window only). An unreadable knowledge file gives 503 `KNOWLEDGE_UNAVAILABLE`.
 5. **Input guardrails.** Attempts to extract the system prompt or secrets get a canned reply with no model call. Injection patterns are flagged and counted. Prompt tags in the current message and replayed history are neutralised.
 6. **AI path.** Retrieve evidence, then make one model call with `answer_guest`, `check_availability` and `request_booking_details`.
-   - `answer_guest` goes through the output guardrails: secret or prompt leakage, citations checked against the knowledge base, availability claims, and prices checked against cited entries (the price check can be switched off per tenant).
+   - `answer_guest` goes through the output guardrails: secret or prompt leakage, citations checked against the knowledge base, availability claims, and prices checked against the cited entries plus any prices an availability search already showed this guest (the price check can be switched off per tenant).
    - Action tools run through the `ToolRegistry`. Availability results go straight to the reply; prices and inventory never pass through the model.
 7. **Degradation.**
    - Any model or provider failure (timeout, status, connection, protocol or SDK error, refusal, truncation, invalid output, rejected tool call) → the offline engine answers, with a notice, and `meta.degradation` reports `LLM_TIMEOUT` or `LLM_UNAVAILABLE`.

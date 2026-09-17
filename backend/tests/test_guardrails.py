@@ -169,3 +169,32 @@ def test_price_check_follows_the_tenant_flag(fake_messages):
     outcome = handle(container, "Villa price?")
 
     assert "unsupported_price" not in outcome.trace.guardrails  # tenant opted out; global default is on
+
+
+def test_a_price_the_guest_was_already_shown_is_not_blocked_as_unsupported(fake_messages):
+    """Seasonal search prices differ from the indicative knowledge-base rate; repeating one is correct."""
+    container = make_container(fake_messages)
+    fake_messages.responses.append(
+        answer_response({"type": "answer", "text": "The Garden Standard Room is the cheapest at INR 5,200 per night.", "source_ids": ["rooms.garden-standard"], "suggestions": []})
+    )
+
+    outcome = container.assistant.handle(
+        turn_request(container, "which is cheapest per night?", recent_offers=["Garden Standard Room: INR 5,200 per night, INR 10,400 total"])
+    )
+
+    assert outcome.reply.type == "answer" and "5,200" in outcome.reply.text
+    assert "unsupported_price" not in outcome.trace.guardrails
+
+
+def test_a_price_that_was_never_shown_or_published_is_still_blocked(fake_messages):
+    container = make_container(fake_messages)
+    fake_messages.responses.append(
+        answer_response({"type": "answer", "text": "The Garden Standard Room is INR 999 per night for you.", "source_ids": ["rooms.garden-standard"], "suggestions": []})
+    )
+
+    outcome = container.assistant.handle(
+        turn_request(container, "any discount per night?", recent_offers=["Garden Standard Room: INR 5,200 per night, INR 10,400 total"])
+    )
+
+    assert outcome.reply.type == "fallback" and "999" not in outcome.reply.text
+    assert "unsupported_price" in outcome.trace.guardrails

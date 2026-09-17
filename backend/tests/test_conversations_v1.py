@@ -162,3 +162,26 @@ def test_example_env_file_parses_to_safe_defaults():
     assert settings.pii_mask_contact_details and settings.worker_threads == 150
     assert settings.model_fast == settings.model_primary and settings.admin_api_tokens == ""
     assert settings.auth_mode == "disabled" and settings.feature_flags == {}
+
+
+def test_prices_the_guest_was_shown_are_carried_into_later_turns(ai_container, fake_messages):
+    """Seasonal prices differ from the knowledge base's indicative "from" rates.
+
+    Found in manual testing: after a monsoon-rate search showing INR 3,900/night, a follow-up quoted the
+    knowledge base's INR 5,200 instead. The prices actually shown are now part of the model's context.
+    """
+    from tests.conftest import answer_response, tool_response
+
+    fake_messages.responses.append(tool_response("check_availability", {"check_in": "2026-10-07", "check_out": "2026-10-09", "adults": 2, "children": 0}))
+    fake_messages.responses.append(answer_response({"type": "answer", "text": "The Garden Standard Room is the most affordable for your dates.", "source_ids": ["rooms.garden-standard"], "suggestions": []}))
+
+    with TestClient(create_app(container=ai_container)) as client:
+        cid = start(client)
+        first = client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "anything available 7 to 9 October for 2 adults?"}).json()
+        client.post(f"{BASE}/conversations/{cid}/messages", json={"message": "any cheaper rooms?"})
+
+    shown = {room["name"]: room["nightly_rate"] for room in first["reply"]["availability"]["rooms"]}
+    context_block = fake_messages.calls[1]["messages"][-1]["content"]
+    assert "Prices the guest was shown" in context_block
+    for name, nightly in shown.items():
+        assert f"{name}: INR {nightly:,} per night" in context_block

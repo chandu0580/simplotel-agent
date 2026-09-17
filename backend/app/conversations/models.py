@@ -33,3 +33,6 @@ class Conversation(BaseModel):
     messages: list[StoredMessage] = Field(default_factory=list)
     active_intent: Literal["information", "availability"] | None = None
     availability_context: BookingContext | None = None
+    # Prices from the guest's last search, one line per room type. Seasonal rates differ from the
+    # knowledge base's indicative "from" rates, so a later turn must quote these, not those.
+    recent_offers: list[str] = Field(default_factory=list)

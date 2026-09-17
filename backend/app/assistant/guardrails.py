@@ -72,7 +72,7 @@ class InputGuardrails:
         return InputVerdict(sanitised, False, flags)
 
 
-def _numbers(text: str) -> set[int]:
+def numbers_in(text: str) -> set[int]:
     return {int(float(n.replace(",", ""))) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text) if n.replace(",", "").replace(".", "").isdigit()}
 
 
@@ -103,8 +103,21 @@ class OutputGuardrails:
         return None
 
     def check_answer(
-        self, kb: KnowledgeBase, reply_type: str, text: str, source_ids: list[str], suggestions: list[str], price_check_enabled: bool | None = None
+        self,
+        kb: KnowledgeBase,
+        reply_type: str,
+        text: str,
+        source_ids: list[str],
+        suggestions: list[str],
+        price_check_enabled: bool | None = None,
+        quoted_prices: set[int] | None = None,
     ) -> GuardrailOutcome:
+        """`quoted_prices` are figures the guest was already shown by a real availability search.
+
+        Without them the guard only trusts knowledge-base rates, which are indicative "from" rates:
+        a correct answer repeating the live price the guest just saw would be replaced by a fallback,
+        and the model would be pushed towards quoting the cheaper indicative rate instead.
+        """
         text = text.strip()
         suggestions = [
             s.strip() for s in suggestions if s.strip() and len(s) <= 80 and not self._leaks(s) and not self._unsupported_claim(s)
@@ -137,9 +150,9 @@ class OutputGuardrails:
 
         if price_check:
             amounts = {int(float((a or b).replace(",", ""))) for a, b in _CURRENCY_AMOUNT.findall(text)}
-            allowed: set[int] = set()
+            allowed: set[int] = set(quoted_prices or ())
             for entry in cited:
-                allowed |= _numbers(entry.content)
+                allowed |= numbers_in(entry.content)
             if amounts - allowed:
                 return GuardrailOutcome(self._safe_fallback(kb, "I couldn't confirm that price from our hotel information."), triggered + ["unsupported_price"])
 

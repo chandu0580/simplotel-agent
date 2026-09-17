@@ -27,7 +27,10 @@ CAPABILITY = ["how can you help me?", "What can you do?", "what can I ask you?",
               "what information do you have?", "Can you help me?", "Tell me what you can do.", "who are you?"]
 THANKS = ["thanks", "Thank you!", "thx", "great", "perfect", "okay", "ok", "got it", "that's helpful"]
 GOODBYE = ["bye", "Goodbye!", "see you", "take care", "good night"]
-SMALLTALK = ["how are you?", "How are u", "what's up", "can I ask something?", "can I ask you a question?", "nice to meet you", "are you there?"]
+SMALLTALK = ["how are you?", "How are u", "what's up", "can I ask something?", "can I ask you a question?", "nice to meet you", "are you there?", "brooh?", "hey bro"]
+OFF_TOPIC = ["what is python?", "What is the weather tomorrow?", "what's the stock price of TCS?", "tell me a joke", "write me a poem", "who won the cricket world cup?"]
+# Hotel questions the knowledge base cannot answer: these must still reach the front desk.
+UNKNOWN_HOTEL_FACTS = ["is there a helipad?", "is there a casino in the hotel?", "do you have a bowling alley?"]
 HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you have a pool?", "what is the cancellation policy?",
                    "Which room is suitable for 3 guests?", "hi, is breakfast included?", "thanks, what about parking?"]
 
@@ -38,9 +41,11 @@ HOTEL_QUESTIONS = ["what time is check-in?", "is breakfast included?", "do you h
     *[(m, "thanks") for m in THANKS],
     *[(m, "goodbye") for m in GOODBYE],
     *[(m, "smalltalk") for m in SMALLTALK],
+    *[(m, "off_topic") for m in OFF_TOPIC],
+    *[(m, None) for m in UNKNOWN_HOTEL_FACTS],
     *[(m, None) for m in HOTEL_QUESTIONS],
     ("do you have rooms available?", None),
-    ("what is the weather in Goa?", None),
+    ("what is the weather in Goa?", "off_topic"),  # not a hotel question: declined, never escalated
     ("", None),
 ])
 def test_classify_only_matches_pure_small_talk(message, expected):
@@ -176,3 +181,37 @@ def test_progressive_conversation_greeting_to_knowledge_to_availability():
     assert availability["type"] == "availability" and availability["availability"]["adults"] == 3
     # Small talk never produced a form or a fallback along the way.
     assert greeting["booking_prefill"] is None and capability["booking_prefill"] is None
+
+
+# ---------- Off-topic requests (found in manual testing) ----------
+
+
+@pytest.mark.parametrize("ai_enabled", [False, True])
+@pytest.mark.parametrize("message", OFF_TOPIC)
+def test_off_topic_requests_are_declined_without_escalating_to_the_front_desk(ai_enabled, message):
+    """The front desk cannot answer "what is python?" either, so the reply must not offer its contacts.
+
+    Handled before the model so the answer cannot vary run to run: previously the model sometimes replied
+    with an uncited "answer", which the output guardrail replaced with a fallback carrying phone, WhatsApp
+    and email.
+    """
+    provider = ScriptedLLMProvider([])  # a model call would raise: off-topic never reaches it
+    container = build_container(Settings.for_tests(), clock=FixedClock(TODAY), llm_provider=provider if ai_enabled else None)
+    with TestClient(create_app(container=container)) as client:
+        reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": message}).json()["reply"]
+
+    assert reply["type"] == "clarification"
+    assert "outside what I can help with" in reply["text"]
+    for contact in ("+91 832 555 0142", "98220 55501", "stay@palmgroveresort.example"):
+        assert contact not in reply["text"], "off-topic must not be escalated to the front desk"
+    assert provider.requests == []
+    assert len(reply["text"]) <= 200
+
+
+@pytest.mark.parametrize("message", UNKNOWN_HOTEL_FACTS)
+def test_unknown_hotel_facts_still_reach_the_front_desk(message):
+    """The opposite case must keep working: a hotel question we cannot answer is escalated."""
+    container = make_container()
+    with TestClient(create_app(container=container)) as client:
+        reply = client.post(f"{BASE}/conversations/{conversation(client)}/messages", json={"message": message}).json()["reply"]
+    assert reply["type"] == "fallback" and "+91 832 555 0142" in reply["text"]

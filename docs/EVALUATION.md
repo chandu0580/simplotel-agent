@@ -145,6 +145,20 @@ After the conversational layer and the brevity/off-topic prompt rules, the devel
 front-desk contact, so the scenario accepts both types and the no-escalation rule is asserted by the AI-only
 `off-topic-not-escalated-to-front-desk` scenario.
 
+#### Price-consistency run (prompt revision 6)
+
+Revision 6 followed a live session in which the guest saw one nightly rate on the availability cards and was then
+quoted a different one in the next turn. The rate a search returns is the seasonal price for those dates; the
+knowledge-base rate is an indicative *from* rate. The searched prices are now carried in the conversation
+(`recent_offers`) into the model's context block **and** into the price guardrail's allow-list, so repeating them is
+neither contradicted nor blocked as an unsupported price. A second rule asks the model to cite every entry a figure
+comes from, and a third draws the off-topic line at "could hotel staff help?" - nearby restaurants, nightlife and
+taxis are front-desk `fallback`s, while coding or weather stay `clarification`s with no contact details.
+
+Live GLM 5.2, development suite: **42/42**, critical 16/16, decision accuracy 17/17, groundedness 16/16,
+guardrail interventions 0/42, p50 **1596 ms**, p95 4921 ms (`evals/results/glm-rev6.md`). Holdout, live:
+**12/12**, critical 10/10. Offline: development 36/36 (critical 16/16), holdout 10/10.
+
 ## E. Holdout suite
 
 **What it is.** `backend/evals/holdout.json`: 12 adversarial scenarios written **after** prompt and guardrail development. Select it with `--suite holdout`; the development suite (`evals/scenarios.json`) is the default.

@@ -38,6 +38,11 @@ from .repository import ConversationConflict, ConversationRepository
 _BUSY = "This conversation is busy with another message. Please try again in a moment."
 
 
+def offer_lines(result: AvailabilityResult) -> list[str]:
+    """What the guest was actually quoted, so a later turn cites those prices, not indicative rates."""
+    return [f"{room.name}: {room.currency} {room.nightly_rate:,} per night, {room.currency} {room.total_price:,} total" for room in result.rooms]
+
+
 class ConversationService:
     def __init__(
         self,
@@ -123,7 +128,14 @@ class ConversationService:
         if locale:
             conversation.locale = locale
         history = [ChatHistoryItem(role=m.role, content=m.content[:4000]) for m in conversation.messages[-self.context_window :]]
-        request = TurnRequest(tenant=ctx, message=message, history=history, booking_context=conversation.availability_context, locale=conversation.locale)
+        request = TurnRequest(
+            tenant=ctx,
+            message=message,
+            history=history,
+            booking_context=conversation.availability_context,
+            recent_offers=conversation.recent_offers,
+            locale=conversation.locale,
+        )
         outcome = self.assistant.handle(request)
         # handle() minimised request.message (app.core.privacy): store that, never the raw text.
         self._append(conversation, "user", request.message, None)
@@ -160,6 +172,7 @@ class ConversationService:
             self._append(conversation, "user", summary, None)
             self._append(conversation, "assistant", result.message, "availability")
             conversation.availability_context = BookingContext(check_in=query.check_in, check_out=query.check_out, adults=query.adults, children=query.children)
+            conversation.recent_offers = offer_lines(result)  # the form path shows prices too
             conversation.active_intent = "availability"
             self._touch_and_save(conversation)
         return result
@@ -169,6 +182,8 @@ class ConversationService:
         del conversation.messages[: -self.max_messages]
 
     def _update_context(self, conversation: Conversation, reply: ChatReply) -> None:
+        if reply.availability:
+            conversation.recent_offers = offer_lines(reply.availability)
         candidate: dict | None = None
         if reply.availability:
             a = reply.availability
