@@ -17,7 +17,7 @@ This repository started as a take-home assignment: build a full-stack AI hotel g
 | Clear fallback when an answer can't be determined | Output guardrails and fallback replies; offline engine `app/assistant/offline.py` |
 | Structured responses, validation, error handling, logging | `app/schemas.py`, `app/api/errors.py`, `app/core/observability.py` |
 | Meaningful automated tests | `backend/tests/`, `frontend/src/App.test.tsx`, `frontend/e2e/` |
-| 8–10+ evaluation scenarios, including frontend loading/error and an E2E flow | `backend/evals/scenarios.json` (34 scenarios), `docs/EVALUATION.md` |
+| 8–10+ evaluation scenarios, including frontend loading/error and an E2E flow | `backend/evals/scenarios.json` (42 scenarios) plus a 12-scenario holdout suite, `docs/EVALUATION.md`; frontend loading/error and the E2E flow are covered by Vitest and Playwright |
 | README, architecture, curl examples, decisions note, AI tools used | `README.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md` |
 
 The assignment-era answers to the brief's product questions (customer problem, guest journey, UX rationale, AI vs deterministic responsibilities, hallucination prevention, failure handling, usefulness metrics, production improvements) are in [DECISIONS.md](DECISIONS.md) and still apply.
