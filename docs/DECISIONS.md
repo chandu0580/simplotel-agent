@@ -358,7 +358,7 @@ The production hardening and evidence phase added shared state, a durable audit 
 
 **Consequences.**
 - Simpler local setup: Python and Node.js only.
-- `Content-Security-Policy` and `Permissions-Policy` for the SPA were set only by nginx (HSTS only through a TLS snippet); these headers, including HSTS at TLS termination, are now a hosting requirement for whatever serves the built SPA, not implemented in this repo. The backend middleware still sets its own security headers (HSTS in production).
+- `Content-Security-Policy` and `Permissions-Policy` for the SPA were set only by nginx (HSTS only through a TLS snippet); these headers, including HSTS at TLS termination, are a hosting requirement for whatever serves the built SPA; `frontend/vercel.json` implements them for the hosted demo. The backend middleware still sets its own security headers (HSTS in production).
 - Multi-replica behaviour remains covered by in-process tests with a shared Redis when one is available (`tests/integration/test_redis_state.py`), not by container tests.
 - The optional Redis and PostgreSQL adapters stay in the code behind their interfaces, but their integration tests no longer run in CI; they skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set. Results from container runs are no longer claimed as current evidence.
 - CI has four jobs: backend, security, frontend, e2e.

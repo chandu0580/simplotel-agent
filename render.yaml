@@ -38,6 +38,10 @@ services:
       # Kept on so a reviewer can open /docs against the live API.
       - key: EXPOSE_API_DOCS
         value: "true"
+      # /metrics must not be public (docs/SYSTEM_DESIGN.md, docs/DEPLOYMENT.md).
+      # The demo API has no internal network, so the endpoint is switched off.
+      - key: METRICS_ENABLED
+        value: "false"
       # Set in the Render dashboard, never committed:
       #   LLM_API_KEY   the GLM gateway key
       #   LLM_BASE_URL  the GLM gateway base URL

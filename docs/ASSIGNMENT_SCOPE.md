@@ -46,7 +46,7 @@ None of this was required by the assignment. It is a foundation, not a productio
 | API | `/api/v1` hotel-scoped guest API, admin API behind an authorization boundary, stable error codes, `/health`, `/ready`, `/metrics`, OpenAPI snapshot contract test; legacy endpoints kept with deprecation headers |
 | Platform | Environment-aware config validation, feature flags, structured JSON logs with redaction, Prometheus metrics, domain events, rate limiting, caching |
 | Frontend | v1 conversations, i18n (English plus a draft Hindi), hotel branding, connection status, accessibility improvements |
-| Delivery | Local run with a Python virtual environment (`uvicorn`) and the Vite dev server; GitHub Actions CI (backend, security, frontend, e2e), which has run on GitHub and passed, plus a manual live-AI eval workflow that has not been run. Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally (a container setup was added at one point and later removed as out of scope). |
+| Delivery | Hosted demo on Vercel (SPA) and Render (API), configured by `render.yaml` and `frontend/vercel.json`; local run with a Python virtual environment (`uvicorn`) and the Vite dev server; GitHub Actions CI (backend, security, frontend, e2e), which has run on GitHub and passed, plus a manual live-AI eval workflow that has not been run. Docker/containerization: NOT REQUIRED FOR CURRENT PROJECT — removed intentionally (a container setup was added at one point and later removed as out of scope). |
 | Evaluation | Structured assertions (decision, tool arguments, guardrails, no-model-call), tags, quality metrics, baseline regression gate, critical-scenario gate, prompt-injection and multi-tenant scenarios, a 12-scenario adversarial holdout suite |
 | Documentation | ENTERPRISE_ARCHITECTURE, SYSTEM_DESIGN, THREAT_MODEL, SRE, OBSERVABILITY, COST_MODEL, ENTERPRISE_READINESS, [CONFIGURATION](CONFIGURATION.md), [DEPLOYMENT](DEPLOYMENT.md), [PERFORMANCE](PERFORMANCE.md), [PRIVACY](PRIVACY.md), [RESERVATION_INTEGRATION](RESERVATION_INTEGRATION.md), this page |
 
@@ -60,4 +60,4 @@ None of this was required by the assignment. It is a foundation, not a productio
 
 - Anthropic live API: NOT VERIFIED — no Anthropic credential. GLM (`glm-5.2`) is now the default runtime provider; its eval runs are GLM-runtime evidence only, not Claude verification.
 - There is no real PMS or booking integration and no production authentication. PostgreSQL stores the audit trail plus tenant and hotel rows synced from the tenant registry at startup; the other database repositories exist as schema only.
-- Nothing has been deployed or measured against SLOs. The only load test is a local single-machine benchmark, not production capacity.
+- A hosted demo is deployed (SPA on Vercel, API on Render, both free tier), but nothing has been measured against SLOs. The only load test is a local single-machine benchmark, not production capacity.

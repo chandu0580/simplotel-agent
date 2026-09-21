@@ -13,6 +13,10 @@ dates, capacity, inventory and prices are computed by deterministic code - never
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)
 
+**[Try the live demo](https://simplotel-agent.vercel.app)** · [Live API docs](https://simplotel-agent-api.onrender.com/docs)
+
+<sub>The API runs on a free Render instance that sleeps when idle, so the first message may take up to a minute to wake it.</sub>
+
 </div>
 
 ![The landing page of the demo hotel](docs/images/landing.png)
@@ -56,8 +60,9 @@ cites the knowledge entries it came from; the room cards come from the availabil
 
 This is a take-home assignment for Simplotel, evolved into an **enterprise architecture foundation**:
 a tenant-aware modular monolith with clear integration boundaries, guardrails, observability, evaluation
-and optional shared-state adapters behind interfaces. It is **not a production deployment**, and the
-table below is deliberate about which parts are verified.
+and optional shared-state adapters behind interfaces. A hosted demo runs at
+[simplotel-agent.vercel.app](https://simplotel-agent.vercel.app), on free tiers and single-instance: it is a
+demo deployment, **not a production one**. The table below is deliberate about which parts are verified.
 [docs/ASSIGNMENT_SCOPE.md](docs/ASSIGNMENT_SCOPE.md) separates what the assignment required from what
 was added later.
 
@@ -72,6 +77,7 @@ was added later.
 | **Optional adapters** (behind interfaces) | Redis state adapter (conversations, rate limits, idempotency, locks) and PostgreSQL adapter (migrations, row-level security, audit sink, retention). Integration tests in `backend/tests/integration` were verified locally once against Redis 7.4 and PostgreSQL 17; they skip unless `TEST_REDIS_URL` / `TEST_DATABASE_URL` are set and are not run in CI. |
 | **Prototype** (single process, per-process or mock) | In-memory state backend (the default), per-process knowledge and availability cache, reservation provider (mock inventory), bookings, dev-only static-token admin auth |
 | **Designed / documented only** | PostgreSQL repositories other than audit (conversations, messages, tool calls, bookings, knowledge, evaluations: schema only), OIDC authentication, semantic retrieval (RAG), real PMS/booking integration, WhatsApp and voice ingress, dashboards and alerting |
+| **Hosted demo** | SPA on Vercel, API on Render, both free tier ([`render.yaml`](render.yaml), [`frontend/vercel.json`](frontend/vercel.json)). Runs `APP_ENV=development` because the demo's model gateway is HTTP-only and production validation rejects a non-HTTPS endpoint; the production-shaped settings are set explicitly. Single instance, in-memory state, `/metrics` off. See [DEPLOYMENT](docs/DEPLOYMENT.md). |
 | **Docker/containerization** | NOT REQUIRED FOR CURRENT PROJECT — removed intentionally. The app runs locally with a Python virtual environment and the Vite dev server. |
 | **Anthropic live API** | **NOT VERIFIED — no Anthropic credential.** The Anthropic adapter is tested with the real SDK against a mocked HTTP transport. |
 | **GLM (default provider)** | Development suite **42/42** and holdout suite **12/12** on the current code (`backend/evals/results/glm-rev10`), plus offline runs of both suites. This is evidence for the GLM runtime only, **not** Claude verification. |
@@ -375,7 +381,7 @@ Details, root-cause analysis and history: [docs/EVALUATION.md](docs/EVALUATION.m
 - **Isolation:** tenant-scoped data access with isolation tests; optional PostgreSQL adapter with row-level security forced on every table and composite tenant keys (verified locally once against PostgreSQL 17; not run in CI).
 - **Admin API:** refuses until real auth is configured; RBAC with tenant and hotel scoping.
 - **HTTP hygiene:** rate limits, CORS allow-list, 64 KB body limit, production configuration validation, and security headers set by the backend middleware (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store`, HSTS in production).
-- **Hosting requirement (not implemented in this repo):** whatever serves the built SPA in a real deployment must set `Content-Security-Policy`, `Permissions-Policy` and, at TLS termination, `Strict-Transport-Security`.
+- **Static-hosting headers (implemented for the hosted demo):** `Content-Security-Policy`, `Permissions-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` for the SPA are set by [`frontend/vercel.json`](frontend/vercel.json) and verified on the deployed site. Any other host serving the built SPA must set them itself.
 
 Threats, residual risks and roadmap: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
@@ -396,7 +402,7 @@ Structured JSON logs carry request, trace, tenant, hotel, conversation and chann
 - **Offline mode is literal:** it matches keywords, answers in English only, and recognises ISO dates only.
 - **Hindi UI strings are a draft** that needs native review.
 - **Not wired up yet:** WhatsApp and voice have render adapters but no inbound channels; semantic retrieval isn't implemented.
-- **Unmeasured in production:** load tests are a local benchmark on one machine, not production capacity; nothing has been deployed, and every SLO in the docs is a proposal.
+- **Unmeasured in production:** load tests are a local benchmark on one machine, not production capacity. The hosted demo is a single free-tier instance with in-memory state that sleeps when idle; it has not been measured against any SLO, so every SLO in the docs remains a proposal.
 
 ## Production roadmap
 
